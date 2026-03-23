@@ -1,4 +1,4 @@
-# fix-relative-imports
+# fix-relative-ts-imports
 
 Replace `../` relative imports with path alias imports (e.g. `~/`). Zero dependencies.
 
@@ -14,10 +14,10 @@ Same-directory imports (`./`) are left untouched.
 
 ```bash
 # from GitHub
-pnpm dlx github:your-username/fix-relative-imports --src src --alias "~/"
+pnpm dlx github:antonchuvirau/fix-relative-ts-imports --src src --alias "~/"
 
 # or npx
-npx github:your-username/fix-relative-imports --src src --alias "~/"
+npx github:antonchuvirau/fix-relative-ts-imports --src src --alias "~/"
 
 # or run locally
 node bin.mjs --src src --alias "~/"
@@ -38,16 +38,16 @@ node bin.mjs --src src --alias "~/"
 
 ```bash
 # Preview what would change
-fix-relative-imports --src src --alias "~/" --dry-run
+fix-relative-ts-imports --src src --alias "~/" --dry-run
 
 # Use @/ alias instead
-fix-relative-imports --src src --alias "@/"
+fix-relative-ts-imports --src src --alias "@/"
 
 # Include .js and .jsx files
-fix-relative-imports --src src --ext ".ts,.tsx,.js,.jsx"
+fix-relative-ts-imports --src src --ext ".ts,.tsx,.js,.jsx"
 
 # Skip additional directories
-fix-relative-imports --src src --skip "node_modules,.git,dist,generated"
+fix-relative-ts-imports --src src --skip "node_modules,.git,dist,generated"
 ```
 
 ## How it works

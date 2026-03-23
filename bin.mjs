@@ -17,9 +17,9 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`fix-relative-imports — replace ../ imports with path alias
+  console.log(`fix-relative-ts-imports — replace ../ imports with path alias
 
-Usage: fix-relative-imports [options]
+Usage: fix-relative-ts-imports [options]
 
 Options:
   -s, --src <dir>     Source directory to scan (default: "src")

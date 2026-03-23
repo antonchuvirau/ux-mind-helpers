@@ -1,12 +1,16 @@
 {
-  "name": "fix-relative-imports",
+  "name": "fix-relative-ts-imports",
   "version": "1.0.0",
   "description": "Replace ../ relative imports with path alias (e.g. ~/). Zero dependencies.",
   "type": "module",
   "bin": {
-    "fix-relative-imports": "./bin.mjs"
+    "fix-relative-ts-imports": "./bin.mjs"
   },
-  "files": ["bin.mjs"],
+  "files": ["bin.mjs", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/antonchuvirau/fix-relative-ts-imports.git"
+  },
   "keywords": [
     "typescript",
     "imports",
