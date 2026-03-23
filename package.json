@@ -1,0 +1,18 @@
+{
+  "name": "fix-relative-imports",
+  "version": "1.0.0",
+  "description": "Replace ../ relative imports with path alias (e.g. ~/). Zero dependencies.",
+  "type": "module",
+  "bin": {
+    "fix-relative-imports": "./bin.mjs"
+  },
+  "files": ["bin.mjs"],
+  "keywords": [
+    "typescript",
+    "imports",
+    "path-alias",
+    "codemod",
+    "relative-imports"
+  ],
+  "license": "MIT"
+}
