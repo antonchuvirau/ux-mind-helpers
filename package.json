@@ -4,6 +4,7 @@
   "description": "Reusable scripts for UX Mind projects. Zero dependencies.",
   "type": "module",
   "bin": {
+    "ux-mind-helpers": "./scripts/help.mjs",
     "fix-relative-imports": "./scripts/fix-relative-imports.mjs",
     "migrate-tailwind-arbitraries": "./scripts/migrate-tailwind-arbitraries.mjs"
   },
