@@ -1,0 +1,9 @@
+[
+  ["bg-[#305cde]", "bg-header-button-bg"],
+  ["text-[#305cde]", "text-header-button-bg"],
+  ["border-[#305cde]", "border-header-button-bg"],
+  ["bg-[#f6f7f9]", "bg-header-dropdown-bg"],
+  ["text-[#f6f7f9]", "text-header-dropdown-bg"],
+  ["bg-[rgba(48,92,222,0.1)]", "bg-header-button-bg-10"],
+  ["bg-[#e8f5e9]", "bg-success-bg"]
+]
