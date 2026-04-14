@@ -8,7 +8,6 @@ Reusable codemod scripts for UX Mind projects. Zero dependencies, Node.js 18+.
 |--------|-------------|
 | [fix-relative-imports](scripts/fix-relative-imports.md) | Replace `../` relative imports with path alias (`~/`, `@/`) |
 | [migrate-tailwind-arbitraries](scripts/migrate-tailwind-arbitraries.md) | Convert arbitrary Tailwind values (`gap-[16px]`) to predefined classes (`gap-4`) |
-| [convert-px.ts](scripts/convert-px.ts) | Simple px-to-Tailwind spacing converter |
 
 ## Usage
 
