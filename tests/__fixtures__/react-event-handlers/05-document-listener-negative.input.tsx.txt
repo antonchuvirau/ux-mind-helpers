@@ -1,0 +1,15 @@
+import { useEffect } from "react";
+
+export function EscapeListener() {
+  useEffect(() => {
+    function onEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+      }
+    }
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, []);
+
+  return null;
+}

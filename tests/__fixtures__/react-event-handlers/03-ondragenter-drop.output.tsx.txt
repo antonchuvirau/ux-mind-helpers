@@ -1,0 +1,25 @@
+import { type DragEvent as ReactDragEvent, useCallback } from "react";
+
+export function DropZone() {
+  const onCellDragEnter = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+  }, []);
+  const onCellDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+  }, []);
+  const onCellDragOver = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+  }, []);
+  const onCellDrop = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+  }, []);
+
+  return (
+    <div
+      onDragEnter={onCellDragEnter}
+      onDragLeave={onCellDragLeave}
+      onDragOver={onCellDragOver}
+      onDrop={onCellDrop}
+    />
+  );
+}

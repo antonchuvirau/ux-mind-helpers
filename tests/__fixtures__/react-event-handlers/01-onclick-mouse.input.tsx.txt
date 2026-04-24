@@ -1,0 +1,9 @@
+import { useCallback } from "react";
+
+export function ResetButton() {
+  const onReset = useCallback((event: MouseEvent) => {
+    event.stopPropagation();
+  }, []);
+
+  return <div onClick={onReset} />;
+}

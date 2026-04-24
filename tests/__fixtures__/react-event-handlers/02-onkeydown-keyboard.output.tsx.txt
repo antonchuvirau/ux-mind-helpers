@@ -1,0 +1,11 @@
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback } from "react";
+
+export function SearchInput() {
+  const onKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+    }
+  }, []);
+
+  return <input onKeyDown={onKeyDown} />;
+}

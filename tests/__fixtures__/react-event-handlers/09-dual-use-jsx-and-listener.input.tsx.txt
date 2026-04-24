@@ -1,0 +1,18 @@
+import { useEffect } from "react";
+
+// Handler used in BOTH contexts — JSX prop AND document.addEventListener.
+// Documented tradeoff: the JSX-binding trigger wins, we rewrite, the DOM
+// call site then needs manual adjustment. TS would already flag this file
+// pre-codemod on the JSX side, so the conflict is not silent.
+export function DualUse() {
+  function onShared(event: MouseEvent) {
+    event.preventDefault();
+  }
+
+  useEffect(() => {
+    document.addEventListener("mousedown", onShared);
+    return () => document.removeEventListener("mousedown", onShared);
+  }, []);
+
+  return <div onClick={onShared}>dual</div>;
+}

@@ -1,0 +1,9 @@
+import { type PointerEvent as ReactPointerEvent, useCallback } from "react";
+
+export function Grip() {
+  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    event.preventDefault();
+  }, []);
+
+  return <button onPointerDown={onPointerDown} />;
+}

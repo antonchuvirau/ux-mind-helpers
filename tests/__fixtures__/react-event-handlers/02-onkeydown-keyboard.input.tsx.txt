@@ -1,0 +1,11 @@
+import { useCallback } from "react";
+
+export function SearchInput() {
+  const onKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+    }
+  }, []);
+
+  return <input onKeyDown={onKeyDown} />;
+}

@@ -1,0 +1,14 @@
+import { useCallback, useState } from "react";
+
+export function DestructuringCase() {
+  const [value, setValue] = useState("");
+
+  // `setValue` is NOT a handler; it's the setter from useState. The prior
+  // bare-assign backward-scan would mis-claim this identifier when it saw a
+  // nearby `(event: MouseEvent) =>` in the same region.
+  const onActualClick = (event: MouseEvent) => {
+    setValue(String(event.clientX));
+  };
+
+  return <div onClick={onActualClick}>{value}</div>;
+}

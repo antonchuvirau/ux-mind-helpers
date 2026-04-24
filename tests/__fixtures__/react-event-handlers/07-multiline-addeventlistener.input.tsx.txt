@@ -1,0 +1,22 @@
+import { useEffect } from "react";
+
+export function MultilineListener() {
+  useEffect(() => {
+    function onClickOutside(event: MouseEvent) {
+      if (event.target) {
+        event.preventDefault();
+      }
+    }
+    document.addEventListener(
+      "mousedown",
+      onClickOutside,
+    );
+    return () =>
+      document.removeEventListener(
+        "mousedown",
+        onClickOutside,
+      );
+  }, []);
+
+  return null;
+}
