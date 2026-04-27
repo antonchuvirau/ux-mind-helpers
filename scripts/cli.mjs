@@ -13,6 +13,7 @@ const SCRIPTS = {
   "migrate-tailwind-arbitraries": "migrate-tailwind-arbitraries.mjs",
   "react-namespace-imports": "react-namespace-imports.mjs",
   "lucide-icon-suffix": "lucide-icon-suffix.mjs",
+  "check-no-memo-carveout": "check-no-memo-carveout.mjs",
 };
 
 const HELP = `ux-mind-helpers — reusable codemod scripts for UX Mind projects
@@ -22,6 +23,7 @@ Scripts:
   migrate-tailwind-arbitraries  Convert arbitrary Tailwind values to predefined classes
   react-namespace-imports       Flatten 'import * as React' to named imports
   lucide-icon-suffix            Append 'Icon' suffix to lucide-react imports
+  check-no-memo-carveout        React Compiler interior-mutability lint guard
 
 Usage:
   pnpm dlx github:antonchuvirau/ux-mind-helpers <script> [options]

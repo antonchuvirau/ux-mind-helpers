@@ -10,6 +10,7 @@ Reusable codemod scripts for UX Mind projects. Zero dependencies, Node.js 18+.
 | [migrate-tailwind-arbitraries](scripts/migrate-tailwind-arbitraries.md) | Convert arbitrary Tailwind values (`gap-[16px]`) to predefined classes (`gap-4`) |
 | [react-namespace-imports](scripts/react-namespace-imports.md) | Flatten `import * as React` to named imports; alias DOM event types used generically |
 | [lucide-icon-suffix](scripts/lucide-icon-suffix.md) | Append `Icon` suffix to `lucide-react` imports (`Check` → `CheckIcon`) |
+| [check-no-memo-carveout](scripts/check-no-memo-carveout.md) | React Compiler interior-mutability lint guard (TanStack Table/Virtual, react-hook-form, MobX, zustand, react-query) |
 
 ## Usage
 
