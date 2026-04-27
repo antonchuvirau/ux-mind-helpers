@@ -12,10 +12,10 @@ rounded-[20px] → rounded-2xl  (from your @theme)
 
 ```bash
 # from target project root
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers migrate-tailwind-arbitraries --dry-run
+pnpm dlx github:antonchuvirau/ux-mind-helpers migrate-tailwind-arbitraries --dry-run
 
 # with custom paths
-migrate-tailwind-arbitraries --css src/styles/app.css --dirs src --mappings tw-mappings.json
+pnpm dlx github:antonchuvirau/ux-mind-helpers migrate-tailwind-arbitraries --css src/styles/app.css --dirs src --mappings tw-mappings.json
 ```
 
 ## Options

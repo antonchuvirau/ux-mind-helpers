@@ -14,7 +14,7 @@ Reusable codemod scripts for UX Mind projects. Zero dependencies, Node.js 18+.
 ## Usage
 
 ```bash
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers <script-name> [options]
+pnpm dlx github:antonchuvirau/ux-mind-helpers <script-name> [options]
 ```
 
 Most scripts default to an interactive flow: scan, print changes, prompt `[Y/n]`. Pass `--dry-run` to preview without prompting, or `--yes` to auto-apply (for CI).

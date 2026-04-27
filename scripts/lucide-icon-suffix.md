@@ -17,13 +17,13 @@ For each `from "lucide-react"` import:
 
 ```bash
 # Interactive: scan, review, prompt [Y/n]
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers lucide-icon-suffix
+pnpm dlx github:antonchuvirau/ux-mind-helpers lucide-icon-suffix
 
 # CI check
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers lucide-icon-suffix --dry-run
+pnpm dlx github:antonchuvirau/ux-mind-helpers lucide-icon-suffix --dry-run
 
 # CI fix
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers lucide-icon-suffix --yes
+pnpm dlx github:antonchuvirau/ux-mind-helpers lucide-icon-suffix --yes
 ```
 
 ## Options

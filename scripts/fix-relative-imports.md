@@ -11,7 +11,7 @@ import { foo } from "~/lib/foo";
 ## Usage
 
 ```bash
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers fix-relative-imports --src . --alias "~/"
+pnpm dlx github:antonchuvirau/ux-mind-helpers fix-relative-imports --src . --alias "~/"
 ```
 
 ## Options

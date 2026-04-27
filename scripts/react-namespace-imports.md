@@ -17,16 +17,16 @@ Covered DOM event types: `AnimationEvent`, `ClipboardEvent`, `CompositionEvent`,
 
 ```bash
 # Interactive: scan, review, prompt [Y/n]
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers react-namespace-imports
+pnpm dlx github:antonchuvirau/ux-mind-helpers react-namespace-imports
 
 # Scoped to a subdirectory
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers react-namespace-imports --src app
+pnpm dlx github:antonchuvirau/ux-mind-helpers react-namespace-imports --src app
 
 # CI check (exits 1 if changes pending, never writes)
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers react-namespace-imports --dry-run
+pnpm dlx github:antonchuvirau/ux-mind-helpers react-namespace-imports --dry-run
 
 # CI fix (auto-apply without prompt)
-pnpm dlx --package github:antonchuvirau/ux-mind-helpers react-namespace-imports --yes
+pnpm dlx github:antonchuvirau/ux-mind-helpers react-namespace-imports --yes
 ```
 
 ## Options
