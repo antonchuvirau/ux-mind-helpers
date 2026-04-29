@@ -7,12 +7,20 @@
     "ux-mind-helpers": "./scripts/cli.mjs"
   },
   "scripts": {
-    "test": "node tests/test.mjs && node tests/check-no-memo-carveout.test.mjs && node tests/check-icon-button-label.test.mjs"
+    "test": "node tests/test.mjs && node tests/check-no-memo-carveout.test.mjs && node tests/check-icon-button-label.test.mjs",
+    "prepublishOnly": "npm test"
   },
   "files": ["scripts/", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/antonchuvirau/ux-mind-helpers.git"
+  },
+  "homepage": "https://github.com/antonchuvirau/ux-mind-helpers#readme",
+  "bugs": {
+    "url": "https://github.com/antonchuvirau/ux-mind-helpers/issues"
   },
   "keywords": [
     "typescript",
