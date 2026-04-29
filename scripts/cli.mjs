@@ -14,6 +14,7 @@ const SCRIPTS = {
   "react-namespace-imports": "react-namespace-imports.mjs",
   "lucide-icon-suffix": "lucide-icon-suffix.mjs",
   "check-no-memo-carveout": "check-no-memo-carveout.mjs",
+  "check-icon-button-label": "check-icon-button-label.mjs",
 };
 
 const HELP = `ux-mind-helpers — reusable codemod scripts for UX Mind projects
@@ -24,6 +25,7 @@ Scripts:
   react-namespace-imports       Flatten 'import * as React' to named imports
   lucide-icon-suffix            Append 'Icon' suffix to lucide-react imports
   check-no-memo-carveout        React Compiler interior-mutability lint guard
+  check-icon-button-label       Flag icon-only Buttons missing aria-label
 
 Usage:
   pnpm dlx github:antonchuvirau/ux-mind-helpers <script> [options]

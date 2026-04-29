@@ -1,13 +1,13 @@
 {
   "name": "ux-mind-helpers",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Reusable scripts for UX Mind projects. Zero dependencies.",
   "type": "module",
   "bin": {
     "ux-mind-helpers": "./scripts/cli.mjs"
   },
   "scripts": {
-    "test": "node tests/test.mjs && node tests/check-no-memo-carveout.test.mjs"
+    "test": "node tests/test.mjs && node tests/check-no-memo-carveout.test.mjs && node tests/check-icon-button-label.test.mjs"
   },
   "files": ["scripts/", "README.md"],
   "repository": {
