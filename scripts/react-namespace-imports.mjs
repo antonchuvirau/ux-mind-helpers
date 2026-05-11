@@ -139,13 +139,18 @@ function findGenericDomTypes(source, domTypeNames) {
 
 export function transformSource(sourceCode) {
   const reactImportMatches = [...sourceCode.matchAll(REACT_IMPORT_PATTERN)];
-  if (reactImportMatches.length === 0) {
-    return null;
-  }
 
   let updatedCode = sourceCode;
   let changed = false;
   const changedMembers = new Set();
+
+  // Quick out: nothing to do.
+  if (
+    reactImportMatches.length === 0 &&
+    !/(?<![\w$.])React\.[A-Za-z_$]/.test(sourceCode)
+  ) {
+    return null;
+  }
 
   // Pass 1: convert namespace imports (import * as React) to named imports.
   for (const match of reactImportMatches) {
@@ -224,6 +229,77 @@ export function transformSource(sourceCode) {
     }
 
     updatedCode = nextCode;
+  }
+
+  // Pass 1.5: bare React.X usages with no namespace alias in scope.
+  // Covers files that have no `import * as React` (and may have no react import
+  // at all). Members get rewritten to X (or ReactX for DOM event types used
+  // generically) and merged into the first react import, or a new named import
+  // is inserted after leading comments / directives.
+  {
+    const bareRegex = /(?<![\w$.])React\.([A-Za-z_$][\w$]*)\b/g;
+    const seenMembers = new Set();
+    for (const m of updatedCode.matchAll(bareRegex)) seenMembers.add(m[1]);
+
+    if (seenMembers.size > 0) {
+      const domUsages = new Set();
+      for (const dom of DOM_EVENT_TYPES) {
+        if (seenMembers.has(dom)) domUsages.add(dom);
+      }
+      const genericDomTypes = findGenericDomTypes(updatedCode, domUsages);
+      const aliasedDomTypes = new Set();
+      const regularMembers = [];
+
+      updatedCode = updatedCode.replace(bareRegex, (_, memberName) => {
+        changedMembers.add(memberName);
+        if (DOM_EVENT_TYPES.has(memberName)) {
+          if (genericDomTypes.has(memberName)) {
+            aliasedDomTypes.add(memberName);
+            return reactAlias(memberName);
+          }
+          return memberName;
+        }
+        if (!regularMembers.includes(memberName)) regularMembers.push(memberName);
+        return memberName;
+      });
+
+      const aliasImports = [...aliasedDomTypes].map(
+        (n) => `type ${n} as ${reactAlias(n)}`
+      );
+
+      const existingImports = [...updatedCode.matchAll(REACT_IMPORT_PATTERN)];
+      if (existingImports.length > 0) {
+        const firstMatch = existingImports[0];
+        const wholeImport = firstMatch[0];
+        const parsed = parseImportSpecifiers(firstMatch[1]);
+        const merged = uniqueSorted([
+          ...parsed.namedImports.filter((m) => !DOM_EVENT_TYPES.has(m)),
+          ...regularMembers,
+          ...aliasImports,
+        ]);
+        const replacementImport = buildReactImport({
+          defaultImport: parsed.defaultImport,
+          namedImports: merged,
+          isTypeOnly: parsed.isTypeOnly,
+        });
+        if (replacementImport && replacementImport !== wholeImport) {
+          updatedCode = updatedCode.replace(wholeImport, replacementImport);
+        }
+      } else {
+        const sortedNames = uniqueSorted([...regularMembers, ...aliasImports]);
+        if (sortedNames.length > 0) {
+          const importLine = `import { ${sortedNames.join(", ")} } from "react";`;
+          const insertPos = findImportInsertPosition(updatedCode);
+          updatedCode =
+            updatedCode.slice(0, insertPos) +
+            importLine +
+            "\n" +
+            updatedCode.slice(insertPos);
+        }
+      }
+
+      changed = true;
+    }
   }
 
   // Pass 2: fix already-converted files with bare DOM event types imported from React.
@@ -480,6 +556,48 @@ function isDomOnPropAssigned(source, name) {
   );
 }
 
+// Char offset after leading blank lines, // and /* */ comments, and string
+// directive prologues like "use client". Used when inserting a synthetic
+// `import ... from "react"` into a file that had none.
+function findImportInsertPosition(source) {
+  const lines = source.split("\n");
+  let idx = 0;
+  let inBlockComment = false;
+
+  while (idx < lines.length) {
+    const trimmed = lines[idx].trim();
+
+    if (inBlockComment) {
+      if (trimmed.includes("*/")) inBlockComment = false;
+      idx++;
+      continue;
+    }
+
+    if (trimmed === "") {
+      idx++;
+      continue;
+    }
+    if (trimmed.startsWith("//")) {
+      idx++;
+      continue;
+    }
+    if (trimmed.startsWith("/*")) {
+      if (!trimmed.includes("*/")) inBlockComment = true;
+      idx++;
+      continue;
+    }
+    if (/^["'`]use [a-z-]+["'`];?$/.test(trimmed)) {
+      idx++;
+      continue;
+    }
+    break;
+  }
+
+  let offset = 0;
+  for (let i = 0; i < idx; i++) offset += lines[i].length + 1;
+  return offset;
+}
+
 // ---------- CLI ----------
 
 const HELP = `react-namespace-imports - convert 'import * as React' to named imports
@@ -581,7 +699,7 @@ async function main() {
   console.log(`\nUpdated ${pending.length} file(s).`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(error);
     process.exitCode = 1;
