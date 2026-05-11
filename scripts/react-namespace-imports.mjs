@@ -606,7 +606,7 @@ function findImportInsertPosition(source) {
       idx++;
       continue;
     }
-    if (/^["'`]use [a-z-]+["'`];?$/.test(trimmed)) {
+    if (/^["'`]use(?:\s+[a-z-]+)+["'`];?$/.test(trimmed)) {
       idx++;
       continue;
     }
