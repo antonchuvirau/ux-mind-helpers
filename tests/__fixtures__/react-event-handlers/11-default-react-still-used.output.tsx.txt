@@ -1,0 +1,7 @@
+import React, { ReactElement } from "react";
+
+export type ReactAlias = typeof React;
+
+export function Widget(): ReactElement {
+  return <div />;
+}

@@ -277,8 +277,16 @@ export function transformSource(sourceCode) {
           ...regularMembers,
           ...aliasImports,
         ]);
+        // Drop the default `React` import if rewriting bare `React.X` left it
+        // unreferenced. Skip if the identifier is still used elsewhere (e.g.
+        // `typeof React`, JSX namespace lookups outside React.X form).
+        const nextDefault =
+          parsed.defaultImport === "React" &&
+          !isIdentifierUsedOutside(updatedCode, "React", wholeImport)
+            ? null
+            : parsed.defaultImport;
         const replacementImport = buildReactImport({
-          defaultImport: parsed.defaultImport,
+          defaultImport: nextDefault,
           namedImports: merged,
           isTypeOnly: parsed.isTypeOnly,
         });
@@ -553,6 +561,18 @@ function isJsxPropBound(source, name) {
 function isDomOnPropAssigned(source, name) {
   return new RegExp(`\\.\\s*on[a-z]+\\s*=\\s*${escapeRegExp(name)}\\b`).test(
     source
+  );
+}
+
+// Whole-word identifier presence outside a given substring (typically the
+// import declaration we are rewriting). Used to decide whether the default
+// `React` import can be safely dropped after Pass 1.5 rewrites all `React.X`.
+function isIdentifierUsedOutside(source, name, excludeSubstring) {
+  const stripped = excludeSubstring
+    ? source.replace(excludeSubstring, "")
+    : source;
+  return new RegExp(`(?<![\\w$.])${escapeRegExp(name)}(?![\\w$])`).test(
+    stripped
   );
 }
 
