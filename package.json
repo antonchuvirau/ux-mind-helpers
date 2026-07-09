@@ -7,6 +7,13 @@
     "ux-mind-helpers": "scripts/cli.mjs"
   },
   "scripts": {
+    "codemod:fix-relative-imports": "node scripts/fix-relative-imports.mjs",
+    "codemod:migrate-tailwind-arbitraries": "node scripts/migrate-tailwind-arbitraries.mjs",
+    "codemod:react-namespace-imports": "node scripts/react-namespace-imports.mjs",
+    "codemod:lucide-icon-suffix": "node scripts/lucide-icon-suffix.mjs",
+    "codemod:check-no-memo-carveout": "node scripts/check-no-memo-carveout.mjs",
+    "codemod:check-icon-button-label": "node scripts/check-icon-button-label.mjs",
+    "codemod:collapse-comments": "node scripts/collapse-comments.mjs",
     "test": "node tests/test.mjs && node tests/check-no-memo-carveout.test.mjs && node tests/check-icon-button-label.test.mjs && node tests/collapse-comments.test.mjs",
     "prepublishOnly": "npm test"
   },
