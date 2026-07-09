@@ -12,6 +12,7 @@ Reusable codemod scripts for UX Mind projects. Zero dependencies, Node.js 18+.
 | [lucide-icon-suffix](scripts/lucide-icon-suffix.md) | Append `Icon` suffix to `lucide-react` imports (`Check` → `CheckIcon`) |
 | [check-no-memo-carveout](scripts/check-no-memo-carveout.md) | React Compiler interior-mutability lint guard (TanStack Table/Virtual, react-hook-form, MobX, zustand, react-query) |
 | [check-icon-button-label](scripts/check-icon-button-label.md) | Flag icon-only `<Button>`s missing `aria-label`/`aria-labelledby`/`title` (polymorphic-donut systems) |
+| [collapse-comments](scripts/collapse-comments.md) | Collapse multiline comments (non-JSDoc `/* */`, adjacent `//` runs) to one line so the editor owns soft-wrapping |
 
 ## Usage
 
