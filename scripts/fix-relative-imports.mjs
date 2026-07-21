@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Replace ../ relative imports with the configured path alias (~/, @/).
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";

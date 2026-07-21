@@ -3,7 +3,14 @@
 //
 // - Non-JSDoc block comments /* ... */ with newlines -> one-line /* a b c */
 // - Runs of adjacent, same-indent, standalone // lines -> one // line
-// - JSDoc /** ... */ is left untouched (its line structure is semantic).
+// - Prose JSDoc /** ... */ (no @tags) converts to // line comment(s), one per
+//   paragraph — it has no IDE doc value. JSDoc with @tags is left untouched.
+// - Linter/compiler directives (biome-ignore, eslint-disable, @ts-*, …) are
+//   never collapsed or merged — they must stay first on their own line.
+// - Deliberately-formatted comments are left whole: bullet/numbered lists,
+//   markdown/ascii tables, ---- banners, and commented-out code.
+// - Regex literals are skipped too, so a /* or */ inside a char class (e.g.
+//   /[^/*]/) is never mistaken for a comment and made to swallow real code.
 //
 // A hand-rolled scanner (no deps) walks the source and yields comment spans,
 // skipping strings, template literals, and regex-like text so comment markers
@@ -17,13 +24,33 @@ import { pathToFileURL } from "node:url";
 import { confirm, isInteractive } from "./lib/prompt.mjs";
 import { collectSourceFiles, toRelativePath } from "./lib/walk-files.mjs";
 
-// Walk the source, emitting { kind, start, end } for every comment. Strings and
-// template literals are skipped char-by-char (same loop shape as the other
-// codemods' maskStringsAndComments) so a // or /* inside a string is ignored.
+// A `/` begins a regex literal (not division/comment) when the previous
+// significant token is not a value — i.e. it follows an operator, opener, or
+// keyword. This is the standard heuristic; it can misread `a /b/g` where `a` is
+// a value divided twice, but that shape never occurs in real code, and getting
+// it wrong here only skips a would-be comment, never corrupts source.
+const RE_ALLOW_BEFORE = /[([{,;:=!&|?+\-*/%^~<>]/;
+const RE_KEYWORD_BEFORE = /(^|[^.\w$])(return|typeof|instanceof|in|of|new|delete|void|do|else|yield|await|case)$/;
+
+function regexAllowedAfter(prevSignificant, srcBefore) {
+  if (prevSignificant === "") return true; // start of file
+  if (RE_ALLOW_BEFORE.test(prevSignificant)) return true;
+  return RE_KEYWORD_BEFORE.test(srcBefore);
+}
+
+// Walk the source, emitting { kind, start, end } for every comment. Strings,
+// template literals, and regex literals are skipped char-by-char (same loop
+// shape as the other codemods' maskStringsAndComments) so a // or /* inside a
+// string OR a regex character class (e.g. /[^/*]/) is never mistaken for a
+// comment.
 function scanComments(src) {
   const comments = [];
   let i = 0;
   const n = src.length;
+  let prevSignificant = ""; // last non-whitespace, non-comment char seen
+  const setPrev = (ch) => {
+    if (ch !== " " && ch !== "\t" && ch !== "\n" && ch !== "\r") prevSignificant = ch;
+  };
   while (i < n) {
     const c = src[i];
     const next = src[i + 1];
@@ -41,6 +68,35 @@ function scanComments(src) {
       i = stop;
       continue;
     }
+    // Regex literal: skip its body (incl. character classes) so `/[^/*]/` or
+    // `/a\/b/` never leaks a comment marker. Only when a regex is allowed here.
+    if (c === "/" && regexAllowedAfter(prevSignificant, src.slice(0, i))) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < n) {
+        const ch = src[j];
+        if (ch === "\\") {
+          j += 2;
+          continue;
+        }
+        if (ch === "\n") break; // unterminated — bail, treat `/` as division
+        if (ch === "[") inClass = true;
+        else if (ch === "]") inClass = false;
+        else if (ch === "/" && !inClass) {
+          closed = true;
+          j++;
+          break;
+        }
+        j++;
+      }
+      if (closed) {
+        prevSignificant = "/"; // regex is a value; a following `/` is division
+        i = j;
+        continue;
+      }
+      // not a real regex (hit newline) — fall through, advance one char
+    }
     if (c === '"' || c === "'") {
       const quote = c;
       let j = i + 1;
@@ -56,6 +112,7 @@ function scanComments(src) {
         if (src[j] === "\n") break;
         j++;
       }
+      prevSignificant = quote; // a string is a value
       i = j;
       continue;
     }
@@ -83,25 +140,151 @@ function scanComments(src) {
         }
         j++;
       }
+      prevSignificant = "`"; // a template literal is a value
       i = j;
       continue;
     }
+    setPrev(c);
     i++;
   }
   return comments;
 }
 
+// Linter/compiler directives are position-sensitive: they must be the first
+// token of their own comment line or the tool stops honoring them. Never merge
+// or collapse a comment that carries one, and never merge it into a neighbor.
+const DIRECTIVE_RE =
+  /\b(biome-ignore|eslint-disable|eslint-enable|ts-expect-error|ts-ignore|ts-nocheck|prettier-ignore|v8 ignore|c8 ignore|istanbul ignore|@ts-)/;
+
+function isDirective(text) {
+  return DIRECTIVE_RE.test(text);
+}
+
+// Some comments are deliberately formatted and must survive verbatim: bullet or
+// numbered lists, aligned tables, ASCII banners, or commented-out code. Joining
+// their lines produces an unreadable run-on. Detect any such structure and skip
+// the whole comment. `lines` is the inner text already stripped of comment
+// markers (`//`, `*`) and per-line indentation-normalised is NOT required.
+const BULLET_RE = /^\s*([-*+•]\s|\d+[.)]\s)/; // - x | * x | + x | • x | 1. x | 2) x
+// A divider/banner. Two shapes:
+//  - 4+ rule chars in a run anywhere (bare `----`, labelled `STORAGE =====`);
+//  - a line STARTING with 3+ rule chars (`--- Section ---` labelled banners),
+//    which prose almost never does.
+const BANNER_RE = /[-=~─━═]{4,}|[*#]{4,}|^\s*[-=~─━═]{3,}\s/;
+const TABLE_RE = /^\s*\|.*\|/; // |A|B| markdown/ascii table row
+const FENCE_RE = /^\s*```/; // ``` fenced code block
+// Commented-out code: a statement keyword STARTING the line (bare `return`/`if`
+// etc. mid-prose are common English words, so we anchor to line start), an arrow
+// fn, or a line ending in `;`/`{`/`}`. Prose rarely matches; code reliably does.
+// Commented-out code signals, tuned to not fire on prose:
+//  - a declaration/import keyword at line start followed by an identifier
+//    (`const x`, `export function y`, `import z`) — "return the value" won't match;
+//  - a control keyword directly followed by `(` (`if (`, `for (`, `switch (`);
+//  - an arrow function `=>`, or a line ending in a brace.
+const CODE_RE =
+  /^\s*(export\s+)?(function|const|let|var|class|import|async)\s+[\w{[*]|^\s*(if|for|while|switch|catch)\s*\(|=>|[{}]\s*$/;
+
+function isStructural(line) {
+  return (
+    BULLET_RE.test(line) ||
+    TABLE_RE.test(line) ||
+    FENCE_RE.test(line) ||
+    BANNER_RE.test(line) ||
+    CODE_RE.test(line)
+  );
+}
+
+function hasStructure(lines) {
+  return lines.some((line) => line.trim() !== "" && isStructural(line));
+}
+
+// Indent-aligned content: any non-empty line indented DEEPER than the comment's
+// own base (minimum) indent. This is the shape of `Usage:` / `Options:` /
+// `Reads from:` reference blocks AND bare indented command/path blocks (no label
+// needed). Plain prose that merely soft-wraps keeps a flat indent, so it isn't
+// tripped. `contentLines` keep content indentation (only the `*`/`//` marker
+// stripped), so indents are comparable.
+function indentWidth(line) {
+  const m = line.match(/^\s*/);
+  return m ? m[0].length : 0;
+}
+function hasIndentedList(contentLines) {
+  const nonEmpty = contentLines.filter((l) => l.trim() !== "");
+  if (nonEmpty.length < 2) return false;
+  const base = Math.min(...nonEmpty.map(indentWidth));
+  return nonEmpty.some((l) => indentWidth(l) > base);
+}
+
+// Inner lines with ONLY the comment marker stripped (`*` for block, `//` for
+// line) but content indentation preserved — for indent-sensitive checks.
+function contentLines(raw, kind) {
+  const inner = kind === "line" ? raw : raw.slice(raw.startsWith("/**") ? 3 : 2, -2);
+  const strip = kind === "line" ? /^\/\/ ?/ : /^\s*\* ?/;
+  return inner.split("\n").map((line) => line.replace(strip, "").replace(/\s+$/, ""));
+}
+
+// Single `//` line (marker stripped) that must not participate in a merge.
+function isStructuralLine(text) {
+  return isStructural(text.replace(/^\/\/\s?/, ""));
+}
+
+// Split a comment body into physical lines with comment markers stripped, so
+// hasStructure/collapse see the raw prose. `openLen` is the opener width (2 for
+// `/*`, 3 for `/**`); the trailing `*/` is always 2. Fully trimmed: a wrapped
+// line's residual leading indent must not survive as a double space at the join
+// (` *  Must` -> `Must`, not ` Must`). Structure regexes are `^\s*`-tolerant, so
+// trimming doesn't hide bullets/tables.
+function innerLines(raw, openLen) {
+  return raw
+    .slice(openLen, -2)
+    .split("\n")
+    .map((line) => line.replace(/^\s*\*?\s?/, "").trim());
+}
+
 // Collapse block-comment inner text: strip leading `*`/whitespace per line,
 // join non-empty lines with single spaces.
 function collapseBlock(raw) {
-  const inner = raw.slice(2, -2); // drop /* and */
-  const body = inner
-    .split("\n")
-    .map((line) => line.replace(/^\s*\*?\s?/, "").trimEnd())
+  const body = innerLines(raw, 2) // drop /* and */
     .filter((line) => line.length > 0)
     .join(" ")
     .trim();
   return `/* ${body} */`;
+}
+
+// True if a JSDoc block carries any @tag (@param, @returns, @example, …). Such
+// blocks are semantic per-line (and @example may hold code) — leave them alone.
+function isTagJsdoc(text) {
+  return /^\s*\*?\s*@\w/m.test(text.slice(3, -2));
+}
+
+// Group a block's inner lines into paragraphs: each blank-line-separated run of
+// lines joins to one soft-wrap line.
+function jsdocParagraphs(raw) {
+  const lines = innerLines(raw, 3); // drop /** and */
+  const paragraphs = [];
+  let current = [];
+  for (const line of lines) {
+    if (line.length === 0) {
+      if (current.length > 0) {
+        paragraphs.push(current.join(" ").trim());
+        current = [];
+      }
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) paragraphs.push(current.join(" ").trim());
+  return paragraphs.filter(Boolean);
+}
+
+// Convert a prose JSDoc block to `//` line comments: one line per paragraph, a
+// bare `//` separator between paragraphs. The first line sits at the comment's
+// existing column (the replacement span starts at `/**`), so only continuation
+// lines get the `indent` prefix.
+function jsdocToLineComment(raw, indent) {
+  return jsdocParagraphs(raw)
+    .map((p) => `// ${p}`)
+    .join(`\n${indent}//\n${indent}`);
 }
 
 // True if the range [lineStart, tokenStart) on the token's line is only whitespace.
@@ -143,8 +326,24 @@ export function transformSource(src) {
 
   for (const c of comments) {
     if (c.kind !== "block") continue;
-    if (c.text.startsWith("/**") && c.text !== "/**/") continue; // JSDoc
-    if (!c.text.includes("\n")) continue; // already one line
+    if (isDirective(c.text)) continue; // linter/compiler directive
+
+    const isJsdoc = c.text.startsWith("/**") && c.text !== "/**/";
+
+    if (isJsdoc) {
+      if (isTagJsdoc(c.text)) continue; // @tag JSDoc: semantic, skip
+      if (hasStructure(innerLines(c.text, 3))) continue; // list/table/banner/fence/code
+      if (hasIndentedList(contentLines(c.text, "block"))) continue; // Usage:/Options: block
+      // Prose JSDoc has no IDE value (no @tags) — convert to plain // line
+      // comment(s), one per paragraph, regardless of what follows.
+      const converted = jsdocToLineComment(c.text, c.indent);
+      if (converted !== c.text) edits.push({ start: c.start, end: c.end, text: converted });
+      continue;
+    }
+
+    if (!c.text.includes("\n")) continue; // plain /* */ already one line
+    if (hasStructure(innerLines(c.text, 2))) continue; // list/table/banner/fence/code
+
     const collapsed = collapseBlock(c.text);
     if (collapsed !== c.text) edits.push({ start: c.start, end: c.end, text: collapsed });
   }
@@ -154,15 +353,30 @@ export function transformSource(src) {
   let i = 0;
   while (i < lineComments.length) {
     const first = lineComments[i];
+    // Directives never merge and break the run at their boundary.
+    if (isDirective(first.text)) {
+      i += 1;
+      continue;
+    }
+    // Maximal adjacent, same-indent, non-directive run.
     let j = i + 1;
     while (
       j < lineComments.length &&
       lineComments[j].line === lineComments[j - 1].line + 1 &&
-      lineComments[j].indent === first.indent
+      lineComments[j].indent === first.indent &&
+      !isDirective(lineComments[j].text)
     ) {
       j++;
     }
-    if (j - i >= 2) {
+    // If ANY line in the run is structural (bullet/table/banner/fence/code), the
+    // whole run is deliberately formatted — leave it verbatim. Lists and
+    // commented-out code span multiple lines, so a per-line break would flatten
+    // the rest; skipping the entire run preserves it.
+    const runLines = lineComments.slice(i, j);
+    const runIsStructural =
+      runLines.some((c) => isStructuralLine(c.text)) ||
+      hasIndentedList(runLines.map((c) => c.text.replace(/^\/\/ ?/, "").replace(/\s+$/, "")));
+    if (!runIsStructural && j - i >= 2) {
       const bodies = lineComments
         .slice(i, j)
         .map((c) => c.text.replace(/^\/\/\s?/, "").trim())
@@ -187,8 +401,10 @@ const HELP = `collapse-comments - collapse multiline comments to one line
 
 Usage: collapse-comments [options]
 
-Rewrites non-JSDoc /* */ blocks and runs of adjacent // lines to a single line
-so the editor owns soft-wrapping. JSDoc /** */ is left untouched.
+Rewrites /* */ blocks and runs of adjacent // lines to a single line so the
+editor owns soft-wrapping. Prose JSDoc /** */ (no @tags) converts to // line
+comment(s), one per paragraph; JSDoc with @tags and linter directives are left
+untouched.
 
 Options:
   -s, --src <dir>     Source directory to scan (default: ".")

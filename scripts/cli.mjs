@@ -4,34 +4,49 @@
 // failing to expose non-default bins on Windows.
 
 import { spawn } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 
-const SCRIPTS = {
-  "fix-relative-imports": "fix-relative-imports.mjs",
-  "migrate-tailwind-arbitraries": "migrate-tailwind-arbitraries.mjs",
-  "react-namespace-imports": "react-namespace-imports.mjs",
-  "lucide-icon-suffix": "lucide-icon-suffix.mjs",
-  "check-no-memo-carveout": "check-no-memo-carveout.mjs",
-  "check-icon-button-label": "check-icon-button-label.mjs",
-  "collapse-comments": "collapse-comments.mjs",
-};
+const here = dirname(fileURLToPath(import.meta.url));
 
-const HELP = `ux-mind-helpers — reusable codemod scripts for UX Mind projects
+// Auto-discover every scripts/*.mjs (except this dispatcher) so a new codemod
+// shows up in `--help` the moment its file lands — no manual registry to sync.
+// A script's one-line description is the first `// ...` comment in its file.
+function discoverScripts() {
+  const scripts = {};
+  for (const file of readdirSync(here)) {
+    if (!file.endsWith(".mjs") || file === "cli.mjs") continue;
+    const name = file.slice(0, -4);
+    const firstComment = readFileSync(join(here, file), "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("// "));
+    scripts[name] = {
+      file,
+      desc: firstComment ? firstComment.slice(3).trim() : "",
+    };
+  }
+  return scripts;
+}
+
+const SCRIPTS = discoverScripts();
+
+function buildHelp() {
+  const names = Object.keys(SCRIPTS).sort();
+  const pad = Math.max(...names.map((n) => n.length));
+  const lines = names.map((n) => `  ${n.padEnd(pad)}  ${SCRIPTS[n].desc}`);
+  return `ux-mind-helpers — reusable codemod scripts for UX Mind projects
 
 Scripts:
-  fix-relative-imports          Replace ../ imports with path alias (~/, @/)
-  migrate-tailwind-arbitraries  Convert arbitrary Tailwind values to predefined classes
-  react-namespace-imports       Flatten 'import * as React' to named imports
-  lucide-icon-suffix            Append 'Icon' suffix to lucide-react imports
-  check-no-memo-carveout        React Compiler interior-mutability lint guard
-  check-icon-button-label       Flag icon-only Buttons missing aria-label
-  collapse-comments             Collapse multiline comments to one line (soft-wrap)
+${lines.join("\n")}
 
 Usage:
   pnpm dlx github:antonchuvirau/ux-mind-helpers <script> [options]
   pnpm dlx github:antonchuvirau/ux-mind-helpers <script> --help`;
+}
+
+const HELP = buildHelp();
 
 const [, , cmd, ...args] = process.argv;
 
@@ -40,15 +55,14 @@ if (!cmd || cmd === "--help" || cmd === "-h" || cmd === "help") {
   process.exit(0);
 }
 
-const file = SCRIPTS[cmd];
-if (!file) {
+const entry = SCRIPTS[cmd];
+if (!entry) {
   console.error(`Unknown script: ${cmd}\n`);
   console.log(HELP);
   process.exit(1);
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-const child = spawn(process.execPath, [join(here, file), ...args], {
+const child = spawn(process.execPath, [join(here, entry.file), ...args], {
   stdio: "inherit",
 });
 child.on("exit", (code, signal) => {
