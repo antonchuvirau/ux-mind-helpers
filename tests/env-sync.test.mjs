@@ -4,7 +4,7 @@
 // The point of this suite is the property the script exists for: values survive byte-for-byte and never appear in output. Fixtures use fake secrets containing the exact characters that break naive line-splitting — `#`, `=`, quotes, newlines.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -182,7 +182,8 @@ console.log("\nlayout");
   write(".env.local", "NEXT_PUBLIC_ENV=LOCAL\nSOME_NEW_KEY=whatever\n");
   const result = run([".env.local"]);
   const after = read(".env.local");
-  ok("unknown key moves to Uncategorised", after.includes("Uncategorised"));
+  // Nothing in the fixture project reads it, so it groups as dead-or-external rather than into a flat list.
+  ok("unknown key moves to an undeclared group", after.includes("Unused here"));
   eq("unknown key keeps its value", values(after).get("SOME_NEW_KEY"), "whatever");
   ok("section rules rendered", after.includes("── Runtime"));
   ok("extra key named in report", result.out.includes("SOME_NEW_KEY") || result.out.includes("extra"));
@@ -205,6 +206,42 @@ console.log("\nlayout");
   const second = run([".env.local"]);
   eq("idempotent", read(".env.local"), first);
   ok("second run reports already formatted", second.out.includes("already formatted"));
+}
+
+console.log("\nundeclared-key grouping");
+{
+  withSchema();
+  mkdirSync(path.join(dir, "scripts"), { recursive: true });
+  mkdirSync(path.join(dir, "lib"), { recursive: true });
+  write("scripts/migrate.ts", "const id = process.env.MIGRATION_TOKEN;\n");
+  write("lib/thing.ts", 'const m = process.env["APP_ONLY_KEY"];\n');
+  write(
+    ".env.local",
+    'DATABASE_URL="x"\nSTRIPE_SECRET_KEY=sk_x\nNEXT_PUBLIC_ENV=LOCAL\nMIGRATION_TOKEN=t\nAPP_ONLY_KEY=a\nDEAD_KEY=d\n'
+  );
+  run([".env.local"]);
+  const after = read(".env.local");
+
+  ok("script-only key grouped as tooling", after.includes("Scripts and tests only"));
+  // The reader's next question is "read by what?", so the file is named inline.
+  ok("names the file that reads a tooling key", after.includes("scripts/migrate.ts"));
+  // Read by app code but absent from the schema is the actionable case: createEnv will not expose it, so the app reads undefined.
+  ok("app-code key grouped separately", after.includes("read by app code but missing from the schema"));
+  ok("bracket access is detected", after.includes("lib/thing.ts"));
+  ok("key read by nothing grouped as unused", after.includes("Unused here"));
+
+  const order = ["APP_ONLY_KEY", "MIGRATION_TOKEN", "DEAD_KEY"].map((k) => after.indexOf(`${k}=`));
+  ok("groups ordered app -> tooling -> unused", order[0] < order[1] && order[1] < order[2]);
+  eq("every undeclared key keeps its value", values(after).get("DEAD_KEY"), "d");
+}
+{
+  withSchema();
+  write(".env.local", 'DATABASE_URL="x"\nSTRIPE_SECRET_KEY=sk_x\nNEXT_PUBLIC_ENV=LOCAL\nSOMETHING=y\n');
+  run(["--no-scan", ".env.local"]);
+  const after = read(".env.local");
+  // With no scan there is no evidence, so claiming "unused" would be a guess presented as a finding.
+  ok("--no-scan falls back to a neutral heading", after.includes("── Uncategorised"));
+  ok("--no-scan does not claim a key is unused", !after.includes("Unused here"));
 }
 
 console.log("\n--check");

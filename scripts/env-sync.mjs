@@ -228,6 +228,77 @@ export function parseSchema(source) {
   return keys;
 }
 
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".yaml", ".yml"]);
+// `.output`, `playwright-report` and `test-results` hold generated run artefacts that quote source lines back — counting those as "a file that reads this key" would credit a variable to its own failure log.
+const SKIP_DIRS = new Set([".git", ".next", ".turbo", ".vercel", ".output", "coverage", "dist", "node_modules", "out", "build", "playwright-report", "test-results"]);
+
+// `process.env.X`, `process.env["X"]`, and the bare `X:` / `X =` forms a CI workflow uses.
+const USAGE_RE = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\])/g;
+
+/**
+ * Walks the project once and returns `KEY -> [files that read it]`, so a variable the schema does not declare can still be explained by where it is used rather than dumped into an undifferentiated list.
+ *
+ * The distinction this draws is the useful one: a key read only by `scripts/` or `tests/` is legitimately outside the app schema (tooling never reaches the request path), while a key read by nothing at all is either dead or consumed by an external tool — two very different follow-ups, and neither is visible from the env file alone.
+ */
+export function scanUsage(root) {
+  const usage = new Map();
+
+  const walk = (dir) => {
+    let dirents;
+    try {
+      dirents = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const dirent of dirents) {
+      const full = path.join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        if (!SKIP_DIRS.has(dirent.name)) walk(full);
+        continue;
+      }
+      if (!SOURCE_EXTENSIONS.has(path.extname(dirent.name))) continue;
+      let source;
+      try {
+        source = readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      const rel = path.relative(root, full).replace(/\\/g, "/");
+      for (const match of source.matchAll(USAGE_RE)) {
+        const key = match[1] ?? match[2];
+        if (!usage.has(key)) usage.set(key, new Set());
+        usage.get(key).add(rel);
+      }
+    }
+  };
+
+  walk(root);
+  return usage;
+}
+
+// Directories whose contents never run in the request path, plus the root-level config files that configure them. `playwright.config.ts` reads the same E2E credentials the specs do; treating it as app code would file a purely test-time variable as an application concern.
+const TOOLING_DIR_RE = /^(scripts?|tests?|e2e|__tests__|cypress|\.github|prisma\/(migrate|seed))\//;
+const TOOLING_FILE_RE = /^(playwright|vitest|jest|cypress|drizzle|prisma)\.[\w.]*config\.[jt]s$/;
+const TEST_FILE_RE = /\.(test|spec)\.[jt]sx?$/;
+
+function isTooling(file) {
+  return TOOLING_DIR_RE.test(file) || TOOLING_FILE_RE.test(file) || TEST_FILE_RE.test(file);
+}
+
+/**
+ * Classifies an undeclared key by where it is read, which is what turns a flat "Uncategorised" wall into something actionable.
+ *
+ * `tooling` is the common legitimate case and needs no follow-up; `unused` is the one worth acting on, but it deliberately says "or an external tool" rather than "delete me" — plenty of variables are read by something outside this codebase (Prisma's own CLI, `vercel env pull`, a mail relay), and a scanner that only sees this repo cannot tell the difference.
+ */
+export function classify(key, usage) {
+  // No scan ran (`--no-scan`), so there is no evidence either way. Claiming "unused" here would be a guess presented as a finding.
+  if (usage.size === 0) return { kind: "unknown", files: [] };
+  const files = [...(usage.get(key) ?? [])];
+  if (files.length === 0) return { kind: "unused", files };
+  const appFiles = files.filter((f) => !isTooling(f));
+  return { kind: appFiles.length === 0 ? "tooling" : "app", files };
+}
+
 /** Keys declared in `server`/`client` but absent from `runtimeEnv` are invisible at runtime — the app reads `undefined` no matter what the env file says. Cheap to detect here, so it is. */
 export function findRuntimeEnvGaps(source) {
   const lines = source.split(/\r?\n/);
@@ -258,7 +329,7 @@ export function findRuntimeEnvGaps(source) {
 }
 
 /** Renders one env file: schema order, schema comments, schema sections, then anything left over under "Uncategorised". */
-export function render(filename, entries, schemaKeys, schemaPath) {
+export function render(filename, entries, schemaKeys, schemaPath, usage = new Map()) {
   const header = HEADER[filename] ?? HEADER.default;
   const out = [
     divider(),
@@ -282,23 +353,55 @@ export function render(filename, entries, schemaKeys, schemaPath) {
   for (const [title, keys] of sections) {
     if (title) out.push(sectionRule(title), "");
     for (const [key, meta] of keys) {
-      if (meta.comment.length > 0) out.push(...meta.comment.map((c) => (c ? `# ${c}` : "#")));
-      out.push(`${key}=${entries.get(key)}`, "");
+      // A blank line separates a *documented* key from whatever precedes it, so the comment visibly belongs to the key below it. Consecutive undocumented keys pack together instead — ten bare analytics ids read as one block, not as ten stanzas.
+      if (meta.comment.length > 0) {
+        if (out.at(-1) !== "") out.push("");
+        out.push(...meta.comment.map((c) => (c ? `# ${c}` : "#")));
+      }
+      out.push(`${key}=${entries.get(key)}`);
       placed.add(key);
     }
+    if (out.at(-1) !== "") out.push("");
   }
 
+  // Everything the schema does not declare, split by where it is actually read. One flat "Uncategorised" wall says only "these are not in env.ts", which is the least useful thing about them — a key read by one migration script and a key read by nothing at all need opposite follow-ups.
   const leftover = [...entries.keys()].filter((key) => !placed.has(key));
   if (leftover.length > 0) {
-    out.push(
-      sectionRule("Uncategorised"),
-      "",
-      ...commentBlock(
-        `Not declared in \`${schemaPath}\`. Add each to the schema (and to \`runtimeEnv\`) with a comment saying why it exists, or delete it.`
-      ),
-      ""
-    );
-    for (const key of leftover) out.push(`${key}=${entries.get(key)}`, "");
+    const groups = { tooling: [], app: [], unused: [], unknown: [] };
+    for (const key of leftover) groups[classify(key, usage).kind].push(key);
+
+    const GROUP_HEADINGS = {
+      app: [
+        "Scripts / tooling — read by app code but missing from the schema",
+        `Read by application code yet absent from \`${schemaPath}\`, so the app cannot see them: \`createEnv\` only exposes what it declares. Either declare each one (schema + \`runtimeEnv\`) or stop reading it.`,
+      ],
+      tooling: [
+        "Scripts and tests only — not part of the app schema",
+        "Read only by `scripts/`, `tests/` or CI, never by the request path, so these legitimately live outside the schema. Each key lists the files that read it; a key whose files are gone is a key to delete.",
+      ],
+      unused: [
+        "Unused here — dead, or read by an external tool",
+        `Nothing in this repository reads these. That means either dead configuration to delete, or a variable consumed by something outside the codebase (a CLI, \`vercel env pull\`, a mail relay) — this scan cannot tell the two apart, so nothing is removed automatically.`,
+      ],
+      unknown: [
+        "Uncategorised",
+        `Not declared in \`${schemaPath}\`. Run without \`--no-scan\` to group these by which files read them.`,
+      ],
+    };
+
+    for (const kind of ["app", "tooling", "unused", "unknown"]) {
+      const keys = groups[kind];
+      if (keys.length === 0) continue;
+      const [title, blurb] = GROUP_HEADINGS[kind];
+      out.push(sectionRule(title), "", ...commentBlock(blurb), "");
+      for (const key of keys) {
+        // The reader's next question about a tooling key is always "read by what?" — answering inline is what makes the group actionable rather than merely sorted.
+        const files = classify(key, usage).files;
+        if (files.length > 0) out.push(`# ${files.slice(0, 3).join(", ")}${files.length > 3 ? `, +${files.length - 3} more` : ""}`);
+        out.push(`${key}=${entries.get(key)}`);
+      }
+      if (out.at(-1) !== "") out.push("");
+    }
   }
 
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
@@ -312,6 +415,7 @@ function parseArgs(argv) {
     prune: false,
     schema: null,
     ignore: null,
+    scan: true,
     cwd: process.cwd(),
     help: false,
     files: [],
@@ -325,6 +429,7 @@ function parseArgs(argv) {
       args.scaffold = true;
       args.scaffoldAll = true;
     } else if (a === "--prune") args.prune = true;
+    else if (a === "--no-scan") args.scan = false;
     else if (a === "--schema" && argv[i + 1]) {
       args.schema = argv[i + 1];
       i++;
@@ -352,6 +457,9 @@ Options:
   --scaffold=all       As above, including optional keys.
   --prune              Also drop keys that are BOTH absent from the schema
                        AND empty. A key holding a value is never removed.
+  --no-scan            Skip the source walk that labels undeclared keys by
+                       which files read them. Everything undeclared then
+                       groups under one heading.
   --schema <path>      Schema file to derive layout from (default: env.ts)
   --ignore <files>     Comma-separated env files to skip
                        Default: .env.claude
@@ -398,6 +506,9 @@ function main() {
       .filter(([key, meta]) => !meta.optional && key !== "NODE_ENV")
       .map(([key]) => key)
   );
+
+  // One walk of the project, shared by every file: which source files read each `process.env.X`. Used to label the keys the schema does not declare, so they group by what they are rather than piling into one list.
+  const usage = args.scan ? scanUsage(args.cwd) : new Map();
 
   const ignore = new Set(args.ignore ?? DEFAULT_CONFIG.ignore);
   const targets =
@@ -492,7 +603,7 @@ function main() {
     if (duplicates.length > 0)
       problems.push(`${label} duplicate: ${duplicates.join(", ")}`);
 
-    const next = render(filename, entries, schemaKeys, schemaPath);
+    const next = render(filename, entries, schemaKeys, schemaPath, usage);
 
     // Refuse to write if the rewrite would change which keys exist. Comments and order are the only sanctioned edits, so a key-set difference means the parser mishandled something — most likely an exotic value — and writing would lose data.
     const after = parseAssignments(next);

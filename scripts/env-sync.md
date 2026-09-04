@@ -10,6 +10,7 @@ Env files accumulate whatever order things were pasted in, and tidying one by ha
 - A **required** key missing from one environment, so that deploy fails at boot while the others are fine.
 - A key set in an env file but never declared in the schema, so the app cannot read it no matter what it holds.
 - A key declared in `server`/`client` but absent from `runtimeEnv` — invisible at runtime.
+- A key nothing reads any more, left behind by a migration and indistinguishable from a live one.
 
 The schema file (`env.ts` by default) is the single source of truth for both the layout and the expected key set, so nothing is duplicated into this script.
 
@@ -38,6 +39,7 @@ Wire it into the project:
 | `--scaffold` | Also add each missing **required** schema key, with an empty value. |
 | `--scaffold=all` | As above, including optional keys. |
 | `--prune` | Also drop keys that are **both** absent from the schema **and** empty. |
+| `--no-scan` | Skip the source walk that labels undeclared keys by which files read them. |
 | `--schema <path>` | Schema file to derive layout from. Default `env.ts`. |
 | `--ignore <files>` | Comma-separated env files to skip. Default `.env.claude`. |
 | `--cwd <path>` | Run as if invoked from `<path>`. |
@@ -104,7 +106,39 @@ Four rules, each one a real case and each covered by a test:
 
 ### Generated keys
 
-Some projects build keys at runtime rather than declaring them literally (e.g. spreading OAuth pairs from a provider list), which no text parser can see. Those keys are treated as unknown and render under `Uncategorised` rather than being lost. Declare them literally in the schema if you want them grouped.
+Some projects build keys at runtime rather than declaring them literally (e.g. spreading OAuth pairs from a provider list), which no text parser can see. Those keys are treated as undeclared and grouped by usage rather than being lost. Declare them literally in the schema if you want them under a section.
+
+## Undeclared keys are grouped by what reads them
+
+Plenty of variables legitimately never belong in the app schema — a token used by exactly one migration script, an E2E credential, a CLI's own configuration. Filing all of them under one "Uncategorised" heading says only "not in `env.ts`", which is the least useful fact about them.
+
+So the script walks the project once for `process.env.X` reads and splits the leftovers into three groups, each with the evidence inline:
+
+```
+# ── Scripts and tests only — not part of the app schema ──────────────────────
+
+# scripts/migrate-mux-library.ts, scripts/sync-mux-library.ts
+MUX_PROD_TOKEN_ID="…"
+# scripts/test-twilio.ts
+TEST_PHONE_NUMBER="…"
+
+# ── Unused here — dead, or read by an external tool ──────────────────────────
+
+NEXT_PUBLIC_SUPABASE_URL="…"
+SMTP_HOST="…"
+```
+
+| Group | Meaning | Follow-up |
+| --- | --- | --- |
+| **read by app code but missing from the schema** | Application code reads it, but `createEnv` does not declare it — so the app gets `undefined` regardless of the value | Declare it, or stop reading it |
+| **scripts and tests only** | Read only from `scripts/`, `tests/`, CI or a test-runner config | None — this is the legitimate case |
+| **unused here** | Nothing in the repo reads it | Dead config to delete, *or* read by an external tool |
+
+The last group deliberately does not say "delete me". A variable can be consumed entirely outside the codebase — Prisma's CLI, `vercel env pull`, a mail relay — and a scan of one repository cannot tell that apart from genuinely dead configuration. Nothing is ever removed automatically on the strength of it.
+
+Detection covers `process.env.KEY` and `process.env["KEY"]` across `.ts/.tsx/.js/.mjs/.yaml` and friends. Generated artefact directories (`.next`, `.output`, `playwright-report`, `test-results`) are skipped, so a key is never credited to its own failure log. A key read only via destructuring (`const { KEY, ...rest } = process.env`) reads as unused — correctly, in the one real case observed, where the code strips the variable on purpose.
+
+Use `--no-scan` to skip the walk; undeclared keys then group under a single neutral `Uncategorised` heading rather than being labelled on no evidence.
 
 ## Tradeoffs
 
