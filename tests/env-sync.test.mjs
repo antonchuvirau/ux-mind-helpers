@@ -122,6 +122,45 @@ console.log("\nparseSchema");
   eq("client block parsed too", keys.get("NEXT_PUBLIC_ENV").section, "Runtime");
   eq("marker line is not treated as a comment", keys.get("NEXT_PUBLIC_ENV").comment.length, 0);
 }
+{
+  // A helper that applies `.optional()` in its own body means the call site never contains the string. Reading those as REQUIRED made --check report a wall of false "missing required" against every env file — the one thing a drift gate must not do.
+  const HELPERS = `import { z } from "zod";
+
+const secret = (min = 1) => z.string().min(min);
+
+const optionalOnly = (schema) => schema.optional();
+
+const tooling = (schema) =>
+  IS_LOCAL ? schema.optional() : z.unknown().optional();
+
+const halfOptional = (schema) =>
+  IS_LOCAL ? schema.optional() : schema;
+
+export const env = createEnv({
+  server: {
+    PLAIN_REQUIRED: z.string(),
+    HELPER_REQUIRED: secret(),
+    HELPER_OPTIONAL: optionalOnly(z.string()),
+    TOOLING_BOTH_BRANCHES: tooling(z.url()),
+    HELPER_HALF_OPTIONAL: halfOptional(z.url()),
+    EXPLICIT_OPTIONAL: z.string().optional(),
+  },
+
+  runtimeEnv: {
+    PLAIN_REQUIRED: process.env.PLAIN_REQUIRED,
+  },
+});
+`;
+  const k = parseSchema(HELPERS);
+  ok("plain z.* stays required", !k.get("PLAIN_REQUIRED").optional);
+  // `secret()` returns z.string().min() with no .optional() anywhere — guessing "any lowercase call is optional" would wrongly demote this, and with it real keys like KLAVIYO_ADMIN_EMAIL_INFO.
+  ok("helper without .optional() stays required", !k.get("HELPER_REQUIRED").optional);
+  ok("helper applying .optional() reads as optional", k.get("HELPER_OPTIONAL").optional);
+  ok("ternary helper optional on BOTH branches reads as optional", k.get("TOOLING_BOTH_BRANCHES").optional);
+  // Optional in one environment, required in the other — the gate must keep watching it.
+  ok("ternary helper optional on ONE branch stays required", !k.get("HELPER_HALF_OPTIONAL").optional);
+  ok("explicit .optional() still works", k.get("EXPLICIT_OPTIONAL").optional);
+}
 
 console.log("\nfindRuntimeEnvGaps");
 {

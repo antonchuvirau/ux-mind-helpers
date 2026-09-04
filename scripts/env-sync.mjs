@@ -111,6 +111,39 @@ export function parseAssignments(source) {
 }
 
 /**
+ * Whether a key's schema expression makes it optional.
+ *
+ * A literal `.optional()` covers most declarations. It misses one real shape: a project-local helper that applies `.optional()` internally — `tooling(z.url())` — where the call site never contains the string. Those keys then read as REQUIRED and `--check` reports a wall of false "missing required" against every env file, which is the one thing a drift gate must not do.
+ *
+ * Resolved by reading the helper's own body rather than guessing from its name. `parseSchema` collects the top-level `const <name> = ...` definitions first and marks a helper optional if its body applies `.optional()` unconditionally. Guessing "any lowercase call is optional" was tried and is wrong in the damaging direction: it silently demotes genuinely required keys like `KLAVIYO_ADMIN_EMAIL_INFO: adminEmailList()` and `TWILIO_ACCOUNT_SID: twilioSid("AC")`, quietly removing them from the gate.
+ */
+function isOptionalExpression(expr, optionalHelpers) {
+  if (expr.includes(".optional()")) return true;
+  const call = /^\s*([a-z][A-Za-z0-9_]*)\s*\(/.exec(expr);
+  return call ? optionalHelpers.has(call[1]) : false;
+}
+
+/**
+ * Names of top-level helpers whose body applies `.optional()` on every path, so a call to one yields an optional key.
+ *
+ * Deliberately conservative: a helper that applies `.optional()` only inside a branch (`isLocal ? s.optional() : s`) is NOT collected, because the key is then required in at least one environment and the gate should keep watching it.
+ */
+function findOptionalHelpers(source) {
+  const helpers = new Set();
+  // `const name = (args) => body` up to the next top-level `const`/`export`, which is enough to see a one-expression arrow body.
+  const re = /^const\s+([a-z][A-Za-z0-9_]*)\s*=\s*(\([^)]*\)|[A-Za-z0-9_]+)\s*=>\s*([\s\S]*?)(?=\n(?:const|export|\/\*\*|\/\/)|\n\n)/gm;
+  for (const match of source.matchAll(re)) {
+    const [, name, , body] = match;
+    if (!body.includes(".optional()")) continue;
+    // A ternary is only optional if BOTH branches are. `tooling = isLocal ? schema.optional() : z.unknown().optional()` qualifies; a helper optional on one branch alone does not, because the key stays required in the other environment and the gate should keep watching it.
+    const ternary = /\?([\s\S]*):([\s\S]*)/.exec(body);
+    if (ternary && !(ternary[1].includes(".optional()") && ternary[2].includes(".optional()"))) continue;
+    helpers.add(name);
+  }
+  return helpers;
+}
+
+/**
  * True when a key's accumulated expression is a complete declaration: every bracket opened is closed, and it ends with the `,` that separates one entry from the next.
  *
  * Strings and comments are stripped before counting, so a `(` inside a regex literal or an error message — `z.string().regex(/^sk_/, "must be (secret)")` — cannot leave the depth permanently unbalanced and swallow the rest of the block.
@@ -143,6 +176,7 @@ function isExpressionComplete(text) {
 export function parseSchema(source) {
   const lines = source.split(/\r?\n/);
   const keys = new Map();
+  const optionalHelpers = findOptionalHelpers(source);
 
   let block = null;
   let section = null;
@@ -160,7 +194,7 @@ export function parseSchema(source) {
         block,
         section: keySection,
         comment: keyComment,
-        optional: expr.includes(".optional()"),
+        optional: isOptionalExpression(expr, optionalHelpers),
       });
     }
     key = null;
