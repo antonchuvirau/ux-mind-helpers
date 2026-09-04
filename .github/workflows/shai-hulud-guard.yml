@@ -1,0 +1,99 @@
+name: shai-hulud-guard
+# Server-side detect-and-revert for repos where GitHub rulesets are unavailable (private repos on Free personal accounts). Installed by protection/github-guard-workflow.sh, do not edit copies by hand; edit the template and re-run the installer.
+# No checkout: the pushed range comes from the Compare API, the revert is a Git Refs API call, the alert is an issue. Roughly 6-10 s per push, most of it runner start-up.
+# ponytail: best effort, not a wall. A push that deletes this file switches it off, and a legit push that lands seconds before the revert is rolled back too (the issue says which SHA to restore). Rulesets replace this the day the account has Pro.
+# The paths filter is evaluated by GitHub before a runner starts: a push that touches none of these costs zero runs and zero minutes. Every observed payload touched .gitignore, .vscode/ or a config file, and the 2026-09 one added fonts.
+on:
+  push:
+    paths:
+      - '.gitignore'
+      - '**/.gitignore'
+      - '.vscode/**'
+      - '**/.vscode/**'
+      - '**/*.woff'
+      - '**/*.woff2'
+      - '**/*.ttf'
+      - '**/*.eot'
+      - '**/*.otf'
+      - '**/*.config.js'
+      - '**/*.config.cjs'
+      - '**/*.config.mjs'
+      - '**/*.config.ts'
+      - '**/.eslintrc*'
+      - '**/.prettierrc*'
+      - '**/.babelrc*'
+      - '**/.husky/**'
+      - '**/package.json'
+      - '.github/workflows/shai-hulud-guard.yml'
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: shai-hulud-guard-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  guard:
+    if: github.event.deleted == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: scan pushed range, revert on IOC
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSHER: ${{ github.event.pusher.name }}
+          FORCED: ${{ github.event.forced }}
+        run: |
+          set -u
+          STRONG_IOC='temp_auto_push\.bat|temp_interactive_push\.bat|branch_structure\.json|_\$_[0-9a-f]{4,}|global\['"'"'!'"'"'\]='"'"'[0-9]+'"'"''
+          VSCODE_IOC='"task\.allowAutomaticTasks"\s*:\s*true|node\s+\S+\.(woff2?|ttf|eot|otf|svg|png|jpe?g|gif)\b'
+          CONFIG_IOC='_0x[0-9a-f]{4,6}|String\.fromCharCode\([0-9, ]{50,}\)|eval\s*\(\s*atob\s*\('
+          CONFIG_PATHS='^([^	]*/)?([a-z]+\.config\.(js|cjs|mjs|ts)|\.eslintrc[^	]*|\.prettierrc[^	]*|\.babelrc[^	]*)	'
+          ZERO=0000000000000000000000000000000000000000
+          BRANCH="${REF#refs/heads/}"
+          BASE="$BEFORE"; [ "$BEFORE" = "$ZERO" ] && BASE="$DEFAULT_BRANCH"
+          gh api "repos/$REPO/compare/$BASE...$AFTER?per_page=250" > compare.json || { echo "compare failed (base $BASE); nothing checked"; exit 0; }
+          node -e '
+            const fs = require("fs"); const files = (JSON.parse(fs.readFileSync("compare.json", "utf8")).files || []);
+            const lines = (sign) => files.filter(f => f.patch).flatMap(f => f.patch.split("\n").filter(l => l.startsWith(sign) && !l.startsWith(sign.repeat(3))).map(l => f.filename + "\t" + l));
+            fs.writeFileSync("added.tsv", lines("+").join("\n") + "\n"); fs.writeFileSync("removed.tsv", lines("-").join("\n") + "\n");
+            fs.writeFileSync("fonts.txt", files.filter(f => /\.(woff2?|ttf|eot|otf)$/.test(f.filename) && (f.additions + f.deletions) > 0).map(f => f.filename).join("\n"));
+            fs.writeFileSync("count.txt", String(files.length));'
+          HITS=""
+          H=$(grep -vE '^[^	]*(\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)	' added.tsv | grep -E "$STRONG_IOC" | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          STRONG IOC:
+          $H"
+          H=$(grep -E '^([^	]*/)?\.vscode/(tasks|settings)\.json	' added.tsv | grep -E "$VSCODE_IOC" | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          .vscode auto-run / node on asset:
+          $H"
+          H=$(grep -E "$CONFIG_PATHS" added.tsv | grep -E "$CONFIG_IOC" | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          obfuscated code in a config file (postcss/tailwind/next/... variant):
+          $H"
+          H=$(head -5 fonts.txt); [ -n "$H" ] && HITS="$HITS
+          font file with text content:
+          $H"
+          H=$(grep -E '^([^	]*/)?\.gitignore	' removed.tsv | grep -E '\.vscode/?$|	-!\.vscode/' | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          .gitignore stops ignoring .vscode/:
+          $H"
+          N=$(cat count.txt); [ "$N" -ge 250 ] && echo "note: only the first 250 changed files were scanned"
+          if [ -z "$HITS" ]; then echo "clean: $BASE...$AFTER ($N files)"; exit 0; fi
+          echo "$HITS"
+          if [ "$BEFORE" = "$ZERO" ]; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" && ACTION="deleted new branch \`$BRANCH\` (tip $AFTER)"
+          else
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$BRANCH" -f sha="$BEFORE" -F force=true > /dev/null && ACTION="reset \`$BRANCH\` from $AFTER back to $BEFORE"
+          fi
+          BODY="Shai-Hulud guard $ACTION.
+
+          Push by \`$PUSHER\`, forced=$FORCED. Hits:
+          \`\`\`
+          $HITS
+          \`\`\`
+          The machine that pushed this is infected. Do not pull \`$AFTER\`. Run the toolkit: scan.sh, inspect.sh, then post-cleanup-hardening.md (rotate every credential on that machine). If this was a false positive, restore with: FORCE_ALLOWED_BY_USER=1 git push --force-with-lease origin $AFTER:$BRANCH"
+          gh api "repos/$REPO/issues" -f title="Shai-Hulud guard reverted $BRANCH" -f body="$BODY" > /dev/null
+          echo "::error::malicious push reverted on $BRANCH"
+          exit 1
