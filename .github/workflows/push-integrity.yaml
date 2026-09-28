@@ -1,0 +1,171 @@
+name: push-integrity
+# Server-side detect-and-revert for repos where GitHub rulesets are unavailable (private repos on Free personal accounts). Installed by protection/github-guard-workflow.sh, do not edit copies by hand; edit the template and re-run the installer.
+# No checkout: the pushed range comes from the Compare API, the revert is a Git Refs API call, the alert is an issue. Roughly 6-10 s per push, most of it runner start-up.
+# ponytail: best effort, not a wall. A push that deletes this file switches it off, and a legit push that lands seconds before the revert is rolled back too (the issue says which SHA to restore). Rulesets replace this the day the account has Pro.
+# The paths filter is evaluated by GitHub before a runner starts: a push that touches none of these costs zero runs and zero minutes. Every observed payload touched .gitignore, .vscode/ or a config file, and the 2026-09 one added fonts.
+on:
+  push:
+    paths:
+      - '.gitignore'
+      - '**/.gitignore'
+      - '.vscode/**'
+      - '**/.vscode/**'
+      - '**/*.woff'
+      - '**/*.woff2'
+      - '**/*.ttf'
+      - '**/*.eot'
+      - '**/*.otf'
+      - '**/*.config.js'
+      - '**/*.config.cjs'
+      - '**/*.config.mjs'
+      - '**/*.config.ts'
+      - '**/.eslintrc*'
+      - '**/.prettierrc*'
+      - '**/.babelrc*'
+      - '**/.husky/**'
+      - '**/package.json'
+      - '.github/workflows/push-integrity.yaml'
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: push-integrity-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  guard:
+    if: github.event.deleted == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: scan pushed range, revert on IOC
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSHER: ${{ github.event.pusher.name }}
+          FORCED: ${{ github.event.forced }}
+        run: |
+          set -u
+          STRONG_IOC='temp_auto_push\.bat|temp_interactive_push\.bat|branch_structure\.json|_\$_[0-9a-f]{4,}|global\['"'"'!'"'"'\]='"'"'[0-9]+'"'"''
+          VSCODE_IOC='"task\.allowAutomaticTasks"\s*:\s*true|node\s+\S+\.(woff2?|ttf|eot|otf|svg|png|jpe?g|gif)\b'
+          CONFIG_IOC='_0x[0-9a-f]{4,6}|String\.fromCharCode\([0-9, ]{50,}\)|eval\s*\(\s*atob\s*\('
+          CONFIG_PATHS='^([^	]*/)?([a-z]+\.config\.(js|cjs|mjs|ts)|\.eslintrc[^	]*|\.prettierrc[^	]*|\.babelrc[^	]*)	'
+          ZERO=0000000000000000000000000000000000000000
+          BRANCH="${REF#refs/heads/}"
+          BASE="$BEFORE"; [ "$BEFORE" = "$ZERO" ] && BASE="$DEFAULT_BRANCH"
+          gh api "repos/$REPO/compare/$BASE...$AFTER?per_page=250" > compare.json || { echo "compare failed (base $BASE); nothing checked"; exit 0; }
+          node -e '
+            const fs = require("fs"); const files = (JSON.parse(fs.readFileSync("compare.json", "utf8")).files || []);
+            const lines = (sign) => files.filter(f => f.patch).flatMap(f => f.patch.split("\n").filter(l => l.startsWith(sign) && !l.startsWith(sign.repeat(3))).map(l => f.filename + "\t" + l));
+            fs.writeFileSync("added.tsv", lines("+").join("\n") + "\n"); fs.writeFileSync("removed.tsv", lines("-").join("\n") + "\n");
+            fs.writeFileSync("fonts.txt", files.filter(f => /\.(woff2?|ttf|eot|otf)$/.test(f.filename) && (f.additions + f.deletions) > 0).map(f => f.filename).join("\n"));
+            fs.writeFileSync("count.txt", String(files.length));'
+          HITS=""
+          H=$(grep -vE '^[^	]*(\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)	' added.tsv | grep -E "$STRONG_IOC" | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          STRONG IOC:
+          $H"
+          H=$(grep -E '^([^	]*/)?\.vscode/(tasks|settings)\.json	' added.tsv | grep -E "$VSCODE_IOC" | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          .vscode auto-run / node on asset:
+          $H"
+          H=$(grep -E "$CONFIG_PATHS" added.tsv | grep -E "$CONFIG_IOC" | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          obfuscated code in a config file (postcss/tailwind/next/... variant):
+          $H"
+          H=$(head -5 fonts.txt); [ -n "$H" ] && HITS="$HITS
+          font file with text content:
+          $H"
+          H=$(grep -E '^([^	]*/)?\.gitignore	' removed.tsv | grep -E '\.vscode/?$|	-!\.vscode/' | head -5 || true); [ -n "$H" ] && HITS="$HITS
+          .gitignore stops ignoring .vscode/:
+          $H"
+          N=$(cat count.txt); [ "$N" -ge 250 ] && echo "note: only the first 250 changed files were scanned"
+          if [ -z "$HITS" ]; then echo "clean: $BASE...$AFTER ($N files)"; exit 0; fi
+          echo "$HITS"
+          if [ "$BEFORE" = "$ZERO" ]; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" && ACTION=deleted || ACTION=failed
+          else
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$BRANCH" -f sha="$BEFORE" -F force=true > /dev/null && ACTION=reset || ACTION=failed
+          fi
+          # Report: who pushed, the pushed commits' identities and timezones, whether they replay an existing commit. One open issue per branch; repeat attempts become comments. Forensics failing never stops the report.
+          BRANCH="$BRANCH" HITS="$HITS" ACTION="$ACTION" ZERO="$ZERO" node --input-type=module <<'JS'
+          import { readFileSync } from "node:fs";
+          const ev = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+          const { REPO, BRANCH, BEFORE, AFTER, ZERO, HITS, ACTION, GH_TOKEN } = process.env;
+          const [owner, name] = REPO.split("/");
+          const api = async (path, init = {}) => {
+            const r = await fetch("https://api.github.com" + path, { ...init, headers: { authorization: `Bearer ${GH_TOKEN}`, accept: "application/vnd.github+json", "content-type": "application/json" } });
+            if (!r.ok) throw new Error(`${path} ${r.status} ${await r.text()}`);
+            return r.json();
+          };
+          const gql = async (query) => { const r = await api("/graphql", { method: "POST", body: JSON.stringify({ query }) }); if (r.errors) throw new Error(JSON.stringify(r.errors)); return r.data.repository; };
+          const s7 = (sha) => (sha || "").slice(0, 7);
+          const tz = (d) => { const m = /([+-]\d\d:\d\d|Z)$/.exec(d || ""); return m ? (m[1] === "Z" ? "+00:00" : m[1]) : "?"; };
+          const when = (d) => (d ? `${d.slice(0, 16).replace("T", " ")} ${tz(d)}` : "?");
+          const esc = (t) => String(t ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+          const pushedAt = ev.repository?.pushed_at ? new Date(ev.repository.pushed_at * 1000) : new Date();
+          const kind = ev.created ? "new branch" : ev.forced ? "forced push" : "normal push";
+
+          const rows = [];
+          let notes = "";
+          try {
+            const shas = (ev.commits?.length ? ev.commits.map((c) => c.id) : [AFTER]).slice(-10);
+            const fields = "oid messageHeadline authoredDate author { name email date user { login } } committer { name email date user { login } } signature { isValid signer { login } }";
+            const base = BEFORE !== ZERO ? `object(oid: "${BEFORE}")` : "defaultBranchRef { target";
+            const q = `{ repository(owner: "${owner}", name: "${name}") { ${shas.map((s, i) => `c${i}: object(oid: "${s}") { ... on Commit { ${fields} } }`).join(" ")} base: ${base} { ... on Commit { history(first: 100) { nodes { oid messageHeadline authoredDate committer { date } } } } }${BEFORE !== ZERO ? "" : " }"} } }`;
+            const repo = await gql(q);
+            const history = (BEFORE !== ZERO ? repo.base : repo.base?.target)?.history?.nodes || [];
+            const usual = {};
+            for (const n of history.slice(0, 30)) usual[tz(n.committer?.date)] = (usual[tz(n.committer?.date)] || 0) + 1;
+            const usualList = Object.entries(usual).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+            for (const [i] of shas.entries()) {
+              const c = repo[`c${i}`];
+              if (!c) continue;
+              const who = (p) => `${esc(p.name)} <${esc(p.email)}>${p.user ? ` (@${p.user.login})` : ""}`;
+              const sig = c.signature ? `signed by ${c.signature.signer?.login || "unknown key"}, ${c.signature.isValid ? "valid" : "INVALID"}` : "unsigned";
+              const off = tz(c.committer?.date);
+              const tzNote = !usualList.length ? "" : usualList.includes(off) ? ` (usual here: ${usualList.join(", ")})` : ` (**not seen in the last 30 commits here**, usual: ${usualList.join(", ")})`;
+              rows.push(`| Commit \`${s7(c.oid)}\` | "${esc(c.messageHeadline)}" · author ${who(c.author)}, ${when(c.author?.date)} · committer ${who(c.committer)}, ${when(c.committer?.date)}${tzNote} · ${sig} |`);
+              const twin = history.find((n) => n.oid !== c.oid && n.messageHeadline === c.messageHeadline && Date.parse(n.authoredDate) === Date.parse(c.authoredDate));
+              if (twin) rows.push(`| Looks like | a forged copy of \`${s7(twin.oid)}\` (same message and author date, different content) |`);
+            }
+          } catch (e) {
+            notes = `\n_Commit details unavailable: ${esc(e.message).slice(0, 300)}_\n`;
+          }
+
+          const b = "`" + BRANCH + "`", tip = "`" + s7(AFTER) + "`";
+          const head = {
+            reset: `**A push to ${b} was blocked and reverted.** ${b} is back at \`${s7(BEFORE)}\`; the pushed tip ${tip} is no longer on any branch.`,
+            deleted: `**A new branch ${b} carried malware and was deleted.** Its tip ${tip} is no longer on any branch.`,
+            failed: `**A push to ${b} carries malware signatures and could NOT be reverted automatically.** Reset ${b} to \`${s7(BEFORE)}\` by hand now, before anyone pulls it.`,
+          }[ACTION];
+          const login = ev.sender?.login || "unknown";
+          const body = [
+            head, "",
+            "| | |", "|---|---|",
+            `| Pushed with the credentials of | \`${login}\` (git pusher: ${esc(ev.pusher?.name)} <${esc(ev.pusher?.email)}>) |`,
+            `| When | ${pushedAt.toISOString().slice(0, 19).replace("T", " ")} UTC · ${kind} |`,
+            ...rows, notes,
+            "**Why:** the pushed changes match signatures of the Shai-Hulud / PolinRider npm malware family:",
+            "```", HITS.trim(), "```", "",
+            "**What to do**",
+            `1. Do not pull, check out or merge ${tip}.`,
+            `2. A computer where \`${login}\` is signed in to GitHub is infected. Revoke that account's tokens, OAuth apps and sessions now.`,
+            "3. Find that computer, scan it and rotate every secret it held (toolkit: `post-cleanup-hardening.md`).",
+            `4. Close this issue when done. Further attempts on ${b} are added below as comments.`, "",
+            "_GitHub does not reveal the IP address, location or device of a push. Timezones come from the commit itself: a replayed commit carries the original's, a newly written one the committing machine's clock setting._",
+          ].join("\n");
+
+          const title = `Push integrity check reverted ${BRANCH}`;
+          const open = await api(`/repos/${REPO}/issues?state=open&creator=${encodeURIComponent("github-actions[bot]")}&per_page=100`);
+          const existing = open.find((i) => i.title === title && !i.pull_request);
+          if (existing) {
+            await api(`/repos/${REPO}/issues/${existing.number}/comments`, { method: "POST", body: JSON.stringify({ body: "### Another attempt\n\n" + body }) });
+            console.log(`commented on #${existing.number}`);
+          } else {
+            const i = await api(`/repos/${REPO}/issues`, { method: "POST", body: JSON.stringify({ title, body }) });
+            console.log(`opened #${i.number}`);
+          }
+          JS
+          echo "::error::malicious push on $BRANCH, action: $ACTION"
+          exit 1
