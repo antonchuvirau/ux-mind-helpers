@@ -134,14 +134,17 @@ jobs:
           }
 
           const b = "`" + BRANCH + "`", tip = "`" + s7(AFTER) + "`";
+          // Owners read this issue, not just developers: plain summary on top, forensics folded below.
           const head = {
-            reset: `**A push to ${b} was blocked and reverted.** ${b} is back at \`${s7(BEFORE)}\`; the pushed tip ${tip} is no longer on any branch.`,
-            deleted: `**A new branch ${b} carried malware and was deleted.** Its tip ${tip} is no longer on any branch.`,
-            failed: `**A push to ${b} carries malware signatures and could NOT be reverted automatically.** Reset ${b} to \`${s7(BEFORE)}\` by hand now, before anyone pulls it.`,
+            reset: `The repository's automatic check rolled back a recent change on ${b}. Your site and app are not affected. No action is needed from you: the developers will review it and close this issue.`,
+            deleted: `The repository's automatic check removed a new branch ${b}. Your site and app are not affected. No action is needed from you: the developers will review it and close this issue.`,
+            failed: `The repository's automatic check flagged a recent change on ${b} for a developer to roll back. The developers will handle it and close this issue.`,
           }[ACTION];
           const login = ev.sender?.login || "unknown";
           const body = [
             head, "",
+            "<details><summary>Details for developers</summary>", "",
+            `Branch ${b} ${ACTION === "reset" ? `reset to \`${s7(BEFORE)}\`; pushed tip ${tip} is off every branch.` : ACTION === "deleted" ? `deleted; its tip ${tip} is off every branch.` : `could NOT be reverted automatically: reset it to \`${s7(BEFORE)}\` by hand before anyone pulls ${tip}.`}`, "",
             "| | |", "|---|---|",
             `| Pushed with the credentials of | \`${login}\` (git pusher: ${esc(ev.pusher?.name)} <${esc(ev.pusher?.email)}>) |`,
             `| When | ${pushedAt.toISOString().slice(0, 19).replace("T", " ")} UTC · ${kind} |`,
@@ -154,13 +157,14 @@ jobs:
             "3. Find that computer, scan it and rotate every secret it held (toolkit: `post-cleanup-hardening.md`).",
             `4. Close this issue when done. Further attempts on ${b} are added below as comments.`, "",
             "_GitHub does not reveal the IP address, location or device of a push. Timezones come from the commit itself: a replayed commit carries the original's, a newly written one the committing machine's clock setting._",
+            "", "</details>",
           ].join("\n");
 
-          const title = `Push integrity check reverted ${BRANCH}`;
+          const title = `Automatic check: change rolled back on ${BRANCH}`;
           const open = await api(`/repos/${REPO}/issues?state=open&creator=${encodeURIComponent("github-actions[bot]")}&per_page=100`);
           const existing = open.find((i) => i.title === title && !i.pull_request);
           if (existing) {
-            await api(`/repos/${REPO}/issues/${existing.number}/comments`, { method: "POST", body: JSON.stringify({ body: "### Another attempt\n\n" + body }) });
+            await api(`/repos/${REPO}/issues/${existing.number}/comments`, { method: "POST", body: JSON.stringify({ body: "### Another rollback\n\n" + body }) });
             console.log(`commented on #${existing.number}`);
           } else {
             const i = await api(`/repos/${REPO}/issues`, { method: "POST", body: JSON.stringify({ title, body }) });
