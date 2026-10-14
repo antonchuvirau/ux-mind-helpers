@@ -149,14 +149,14 @@ function findOptionalHelpers(source) {
  * Strings and comments are stripped before counting, so a `(` inside a regex literal or an error message — `z.string().regex(/^sk_/, "must be (secret)")` — cannot leave the depth permanently unbalanced and swallow the rest of the block.
  */
 function isExpressionComplete(text) {
-  const stripped = text
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    // Regex literals, then each quote style. Ordered so a quote inside a regex (and vice versa) is consumed by whichever opened first.
-    .replace(/\/(?:[^/\\\n[]|\\.|\[(?:[^\]\\]|\\.)*\])+\/[gimsuy]*/g, "R")
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+  // One pass, so the token that opens first wins: a `//` inside a string (`"postgres://"`) is string text and not a comment, which stripping comments first would cut from the line, taking the closing brackets with it, and the unbalanced depth would swallow the next key and its comment.
+  const stripped = text.replace(
+    /\/\/[^\n]*|\/\*[\s\S]*?\*\/|\/(?:[^/\\\n[]|\\.|\[(?:[^\]\\]|\\.)*\])+\/[gimsuy]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+    (token) => {
+      if (token.startsWith("//") || token.startsWith("/*")) return "";
+      return token[0] === "/" ? "R" : token[0] + token[0];
+    },
+  );
 
   let depth = 0;
   for (const char of stripped) {

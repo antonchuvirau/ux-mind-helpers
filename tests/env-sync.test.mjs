@@ -162,6 +162,31 @@ export const env = createEnv({
   ok("explicit .optional() still works", k.get("EXPLICIT_OPTIONAL").optional);
 }
 
+console.log("\nparseSchema: a `//` inside a string");
+{
+  const URLS = `export const env = createEnv({
+  server: {
+    // A.
+    DB_URL: z
+      .url()
+      .refine(
+        (url) => url.startsWith("postgres://") || url.startsWith("postgresql://"),
+        "must be a postgres:// string"
+      ),
+    // Why B exists.
+    DB_URL_DIRECT: z.url().optional(),
+  },
+  runtimeEnv: {
+    DB_URL: process.env.DB_URL,
+    DB_URL_DIRECT: process.env.DB_URL_DIRECT,
+  },
+});
+`;
+  const u = parseSchema(URLS);
+  ok("the next key keeps its comment", u.get("DB_URL_DIRECT").comment.join(" ") === "Why B exists.");
+  ok("the next key keeps its optionality", u.get("DB_URL_DIRECT").optional);
+}
+
 console.log("\nfindRuntimeEnvGaps");
 {
   eq("no gaps when every key is wired", findRuntimeEnvGaps(SCHEMA).length, 0);
