@@ -263,8 +263,8 @@ export function parseSchema(source) {
 }
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".yaml", ".yml"]);
-// `.output`, `playwright-report` and `test-results` hold generated run artefacts that quote source lines back — counting those as "a file that reads this key" would credit a variable to its own failure log.
-const SKIP_DIRS = new Set([".git", ".next", ".turbo", ".vercel", ".output", "coverage", "dist", "node_modules", "out", "build", "playwright-report", "test-results"]);
+// `.output`, `playwright-report` and `test-results` hold generated run artefacts that quote source lines back — counting those as "a file that reads this key" would credit a variable to its own failure log. `.claude` (agent worktrees) and `.stryker-tmp` (mutation-testing sandboxes) hold full copies of the project, whose readers would be written into the usage comments as paths into the copy.
+const SKIP_DIRS = new Set([".claude", ".git", ".next", ".stryker-tmp", ".turbo", ".vercel", ".output", "coverage", "dist", "node_modules", "out", "build", "playwright-report", "test-results"]);
 
 // `process.env.X`, `process.env["X"]`, and the bare `X:` / `X =` forms a CI workflow uses.
 const USAGE_RE = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\])/g;

@@ -10,7 +10,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseAssignments, parseSchema, findRuntimeEnvGaps } from "../scripts/env-sync.mjs";
+import { parseAssignments, parseSchema, findRuntimeEnvGaps, scanUsage } from "../scripts/env-sync.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(here, "..", "scripts", "env-sync.mjs");
@@ -293,6 +293,15 @@ console.log("\nundeclared-key grouping");
   ok("app-code key grouped separately", after.includes("read by app code but missing from the schema"));
   ok("bracket access is detected", after.includes("lib/thing.ts"));
   ok("key read by nothing grouped as unused", after.includes("Unused here"));
+
+  // An agent worktree and a Stryker sandbox are full copies of the project; their readers must not be credited, or the usage comment names a path into the copy.
+  mkdirSync(path.join(dir, ".claude/worktrees/x"), { recursive: true });
+  mkdirSync(path.join(dir, ".stryker-tmp/sandbox-x"), { recursive: true });
+  write(".claude/worktrees/x/env.ts", "const k = process.env.WORKTREE_ONLY_KEY;\n");
+  write(".stryker-tmp/sandbox-x/env.ts", "const k = process.env.SANDBOX_ONLY_KEY;\n");
+  const scanned = scanUsage(dir);
+  ok("a reader under .claude/ is not counted", !scanned.has("WORKTREE_ONLY_KEY"));
+  ok("a reader under .stryker-tmp/ is not counted", !scanned.has("SANDBOX_ONLY_KEY"));
 
   const order = ["APP_ONLY_KEY", "MIGRATION_TOKEN", "DEAD_KEY"].map((k) => after.indexOf(`${k}=`));
   ok("groups ordered app -> tooling -> unused", order[0] < order[1] && order[1] < order[2]);
