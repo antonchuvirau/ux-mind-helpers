@@ -54,8 +54,38 @@ const HEADER = {
     "NOT committed — `.gitignore` covers `.env*`. See `.env.example` for the tracked template and the meaning of each variable.",
 };
 
-const headerTail = (schema) =>
-  `Every variable here must also be declared in \`${schema}\` (schema + \`runtimeEnv\`), which validates the environment at startup — an undeclared variable is invisible to the app even when set.\n\nRead values with \`pnpm exec dotenvx run --strict -f <file> -- <command>\`. Never \`cat\` an env file.\n\nReformat with \`pnpm env:format\` — never by hand, and never by opening the file.`;
+// How each package manager runs a dependency's binary and a package script. The header and the `--check` hint name the project's own commands; a pnpm command pasted into a bun project is the wrong runtime.
+const PM_COMMANDS = {
+  bun: { exec: "bun", run: "bun" },
+  npm: { exec: "npm exec --", run: "npm run" },
+  pnpm: { exec: "pnpm exec", run: "pnpm" },
+  yarn: { exec: "yarn", run: "yarn" },
+};
+const LOCKFILES = [
+  ["bun.lock", "bun"],
+  ["bun.lockb", "bun"],
+  ["pnpm-lock.yaml", "pnpm"],
+  ["yarn.lock", "yarn"],
+  ["package-lock.json", "npm"],
+];
+
+/** The project's package manager: the `packageManager` field of its `package.json`, else its lockfile, else pnpm. */
+export function detectPackageManager(cwd) {
+  try {
+    const field = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8")).packageManager;
+    const name = typeof field === "string" ? field.split("@")[0] : "";
+    if (Object.hasOwn(PM_COMMANDS, name)) return name;
+  } catch {
+    // No or unreadable package.json: fall through to the lockfile.
+  }
+  for (const [file, name] of LOCKFILES) {
+    if (existsSync(path.join(cwd, file))) return name;
+  }
+  return "pnpm";
+}
+
+const headerTail = (schema, pm) =>
+  `Every variable here must also be declared in \`${schema}\` (schema + \`runtimeEnv\`), which validates the environment at startup — an undeclared variable is invisible to the app even when set.\n\nRead values with \`${PM_COMMANDS[pm].exec} dotenvx run --strict -f <file> -- <command>\`. Never \`cat\` an env file.\n\nReformat with \`${PM_COMMANDS[pm].run} env:format\` — never by hand, and never by opening the file.`;
 
 const divider = () => `# ${"─".repeat(RULE_WIDTH - 2)}`;
 
@@ -263,7 +293,7 @@ export function parseSchema(source) {
 }
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".yaml", ".yml"]);
-// `.output`, `playwright-report` and `test-results` hold generated run artefacts that quote source lines back — counting those as "a file that reads this key" would credit a variable to its own failure log. `.claude` (agent worktrees) and `.stryker-tmp` (mutation-testing sandboxes) hold full copies of the project, whose readers would be written into the usage comments as paths into the copy.
+// `.output`, `playwright-report` and `test-results` hold generated run artefacts that quote source lines back — counting those as "a file that reads this key" would credit a variable to its own failure log. `.claude` (agent worktrees) and `.stryker-tmp` (mutation-testing sandboxes) hold full copies of the project, whose readers would be written into the usage comments as paths into the copy. A `.next-*` directory is a second Next.js build output (`NEXT_DIST_DIR`), skipped like `.next`.
 const SKIP_DIRS = new Set([".claude", ".git", ".next", ".stryker-tmp", ".turbo", ".vercel", ".output", "coverage", "dist", "node_modules", "out", "build", "playwright-report", "test-results"]);
 
 // `process.env.X`, `process.env["X"]`, and the bare `X:` / `X =` forms a CI workflow uses.
@@ -287,7 +317,7 @@ export function scanUsage(root) {
     for (const dirent of dirents) {
       const full = path.join(dir, dirent.name);
       if (dirent.isDirectory()) {
-        if (!SKIP_DIRS.has(dirent.name)) walk(full);
+        if (!(SKIP_DIRS.has(dirent.name) || dirent.name.startsWith(".next-"))) walk(full);
         continue;
       }
       if (!SOURCE_EXTENSIONS.has(path.extname(dirent.name))) continue;
@@ -363,13 +393,13 @@ export function findRuntimeEnvGaps(source) {
 }
 
 /** Renders one env file: schema order, schema comments, schema sections, then anything left over under "Uncategorised". */
-export function render(filename, entries, schemaKeys, schemaPath, usage = new Map()) {
+export function render(filename, entries, schemaKeys, schemaPath, usage = new Map(), pm = "pnpm") {
   const header = HEADER[filename] ?? HEADER.default;
   const out = [
     divider(),
     ...commentBlock(header),
     "#",
-    ...commentBlock(headerTail(schemaPath)),
+    ...commentBlock(headerTail(schemaPath, pm)),
     divider(),
     "",
   ];
@@ -543,6 +573,7 @@ function main() {
 
   // One walk of the project, shared by every file: which source files read each `process.env.X`. Used to label the keys the schema does not declare, so they group by what they are rather than piling into one list.
   const usage = args.scan ? scanUsage(args.cwd) : new Map();
+  const pm = detectPackageManager(args.cwd);
 
   const ignore = new Set(args.ignore ?? DEFAULT_CONFIG.ignore);
   const targets =
@@ -637,7 +668,7 @@ function main() {
     if (duplicates.length > 0)
       problems.push(`${label} duplicate: ${duplicates.join(", ")}`);
 
-    const next = render(filename, entries, schemaKeys, schemaPath, usage);
+    const next = render(filename, entries, schemaKeys, schemaPath, usage, pm);
 
     // Refuse to write if the rewrite would change which keys exist. Comments and order are the only sanctioned edits, so a key-set difference means the parser mishandled something — most likely an exotic value — and writing would lose data.
     const after = parseAssignments(next);
@@ -697,7 +728,7 @@ function main() {
   if (problems.length > 0) return 1;
   if (args.check && unformatted > 0) {
     console.error(
-      `\n${ICONS.fail} ${unformatted} file(s) not formatted. Run \`pnpm env:format\` to fix. No values were read into this output.`
+      `\n${ICONS.fail} ${unformatted} file(s) not formatted. Run \`${PM_COMMANDS[pm].run} env:format\` to fix. No values were read into this output.`
     );
     return 1;
   }

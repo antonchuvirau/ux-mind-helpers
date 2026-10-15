@@ -10,7 +10,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { parseAssignments, parseSchema, findRuntimeEnvGaps, scanUsage } from "../scripts/env-sync.mjs";
+import { parseAssignments, parseSchema, findRuntimeEnvGaps, scanUsage, detectPackageManager } from "../scripts/env-sync.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(here, "..", "scripts", "env-sync.mjs");
@@ -302,6 +302,10 @@ console.log("\nundeclared-key grouping");
   const scanned = scanUsage(dir);
   ok("a reader under .claude/ is not counted", !scanned.has("WORKTREE_ONLY_KEY"));
   ok("a reader under .stryker-tmp/ is not counted", !scanned.has("SANDBOX_ONLY_KEY"));
+  // `NEXT_DIST_DIR=.next-check` writes a second build output whose chunks inline `process.env` reads.
+  mkdirSync(path.join(dir, ".next-check/server"), { recursive: true });
+  write(".next-check/server/chunk.js", "const k = process.env.BUILD_COPY_KEY;\n");
+  ok("a reader under .next-check/ is not counted", !scanUsage(dir).has("BUILD_COPY_KEY"));
 
   const order = ["APP_ONLY_KEY", "MIGRATION_TOKEN", "DEAD_KEY"].map((k) => after.indexOf(`${k}=`));
   ok("groups ordered app -> tooling -> unused", order[0] < order[1] && order[1] < order[2]);
@@ -315,6 +319,22 @@ console.log("\nundeclared-key grouping");
   // With no scan there is no evidence, so claiming "unused" would be a guess presented as a finding.
   ok("--no-scan falls back to a neutral heading", after.includes("── Uncategorised"));
   ok("--no-scan does not claim a key is unused", !after.includes("Unused here"));
+}
+
+console.log("\npackage manager");
+{
+  withSchema();
+  eq("no package.json or lockfile falls back to pnpm", detectPackageManager(dir), "pnpm");
+  write("bun.lock", "");
+  eq("a lockfile names the manager", detectPackageManager(dir), "bun");
+  write("package.json", JSON.stringify({ packageManager: "yarn@4.0.0" }));
+  eq("the packageManager field wins over a lockfile", detectPackageManager(dir), "yarn");
+  write("package.json", JSON.stringify({ packageManager: "bun@1.3.0" }));
+  write(".env.local", 'DATABASE_URL="x"\nNEXT_PUBLIC_ENV=LOCAL\n');
+  run(["--no-scan", ".env.local"]);
+  const after = read(".env.local");
+  ok("the header names the project's commands", after.includes("`bun dotenvx run --strict") && after.includes("`bun env:format`"));
+  ok("the header names no other manager", !after.includes("pnpm"));
 }
 
 console.log("\n--check");

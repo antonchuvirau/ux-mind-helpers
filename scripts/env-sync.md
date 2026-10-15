@@ -136,7 +136,7 @@ SMTP_HOST="…"
 
 The last group deliberately does not say "delete me". A variable can be consumed entirely outside the codebase — Prisma's CLI, `vercel env pull`, a mail relay — and a scan of one repository cannot tell that apart from genuinely dead configuration. Nothing is ever removed automatically on the strength of it.
 
-Detection covers `process.env.KEY` and `process.env["KEY"]` across `.ts/.tsx/.js/.mjs/.yaml` and friends. Generated artefact directories (`.next`, `.output`, `playwright-report`, `test-results`) are skipped, so a key is never credited to its own failure log. A key read only via destructuring (`const { KEY, ...rest } = process.env`) reads as unused — correctly, in the one real case observed, where the code strips the variable on purpose.
+Detection covers `process.env.KEY` and `process.env["KEY"]` across `.ts/.tsx/.js/.mjs/.yaml` and friends. Generated artefact directories (`.next` and any `.next-*` second build output, `.output`, `playwright-report`, `test-results`) are skipped, so a key is never credited to its own failure log. A key read only via destructuring (`const { KEY, ...rest } = process.env`) reads as unused — correctly, in the one real case observed, where the code strips the variable on purpose.
 
 Use `--no-scan` to skip the walk; undeclared keys then group under a single neutral `Uncategorised` heading rather than being labelled on no evidence.
 
