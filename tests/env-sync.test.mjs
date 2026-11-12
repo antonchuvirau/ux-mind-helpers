@@ -321,6 +321,37 @@ console.log("\nundeclared-key grouping");
   ok("--no-scan does not claim a key is unused", !after.includes("Unused here"));
 }
 
+console.log("\ngit file list");
+{
+  withSchema();
+  const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+  git("init", "-q");
+  write(".gitignore", "ignored-out/\n");
+  mkdirSync(path.join(dir, "ignored-out"), { recursive: true });
+  mkdirSync(path.join(dir, "scripts"), { recursive: true });
+  write("ignored-out/reader.mjs", "const k = process.env.IGNORED_ONLY_KEY;\n");
+  write("scripts/tracked.mjs", "const k = process.env.TRACKED_KEY;\n");
+  git("add", "scripts/tracked.mjs", ".gitignore");
+  const usage = scanUsage(dir);
+  ok("a reader in a git-ignored folder is not counted", !usage.has("IGNORED_ONLY_KEY"));
+  ok("a tracked reader is counted", usage.get("TRACKED_KEY")?.has("scripts/tracked.mjs"));
+  write("scripts/untracked.mjs", "const k = process.env.UNTRACKED_KEY;\n");
+  ok("an untracked, not ignored reader is counted", scanUsage(dir).has("UNTRACKED_KEY"));
+}
+
+console.log("\nhand-written comments on undeclared keys");
+{
+  withSchema();
+  write(".env.local", 'DATABASE_URL="x"\nSTRIPE_SECRET_KEY=sk_x\nNEXT_PUBLIC_ENV=LOCAL\n\n# ── My own heading ──\n# Rotated every quarter.\n# Owner: ops.\nOLD_TOKEN=t\n');
+  run([".env.local"]);
+  const first = read(".env.local");
+  ok("a two-line hand comment survives", first.includes("# Rotated every quarter.\n# Owner: ops.\nOLD_TOKEN=t"));
+  ok("a hand-written heading is not kept", !first.includes("My own heading"));
+  run([".env.local"]);
+  eq("a second run changes nothing", read(".env.local"), first);
+  eq("the value is untouched", values(first).get("OLD_TOKEN"), "t");
+}
+
 console.log("\npackage manager");
 {
   withSchema();

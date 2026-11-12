@@ -18,6 +18,7 @@
 //
 // See env-sync.md for full options + tradeoffs.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -98,6 +99,18 @@ function commentBlock(text) {
   return text.split("\n").map((line) => (line ? `# ${line}` : "#"));
 }
 
+// The `# a/b.ts, c.ts, +2 more` line this script writes above a key; every item holds a `/` or a `.`, which a sentence of prose does not.
+const GENERATED_LABEL_RE = /^#\s*[\w@.\-/]*[/.][\w@.\-/]*(?:,\s*[\w@.\-/]*[/.][\w@.\-/]*)*(?:,\s*\+\d+ more)?\s*$/;
+
+/** The `#` lines directly above `lines[index]` (up to the previous blank line or key), minus section rules and generated file labels. Only a key outside the schema gets them back. */
+function handComment(lines, index) {
+  const block = [];
+  for (let i = index - 1; i >= 0 && /^\s*#/.test(lines[i]) && !/^\s*#\s*─/.test(lines[i]); i--) {
+    if (!GENERATED_LABEL_RE.test(lines[i].trim())) block.unshift(lines[i].trim());
+  }
+  return block;
+}
+
 /**
  * Splits an env file into `KEY -> raw value text`, preserving multi-line values.
  *
@@ -110,6 +123,7 @@ export function parseAssignments(source) {
   const entries = new Map();
   const order = [];
   const duplicates = [];
+  const comments = new Map();
 
   for (let i = 0; i < lines.length; i++) {
     const match = ASSIGNMENT_RE.exec(lines[i]);
@@ -117,6 +131,7 @@ export function parseAssignments(source) {
 
     const key = match[1];
     let value = lines[i].slice(lines[i].indexOf("=") + 1);
+    comments.set(key, handComment(lines, i));
 
     // Consume continuation lines while a quote opened on the first line is still open.
     const quote = /^\s*(['"`])/.exec(value)?.[1];
@@ -137,7 +152,7 @@ export function parseAssignments(source) {
     entries.set(key, value);
   }
 
-  return { entries, order, duplicates };
+  return { entries, order, duplicates, comments };
 }
 
 /**
@@ -299,6 +314,21 @@ const SKIP_DIRS = new Set([".claude", ".git", ".next", ".stryker-tmp", ".turbo",
 // `process.env.X`, `process.env["X"]`, and the bare `X:` / `X =` forms a CI workflow uses.
 const USAGE_RE = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\])/g;
 
+/** `git ls-files --cached --others --exclude-standard` run in `root`, or null outside a git work tree (or without git). */
+function gitFiles(root) {
+  try {
+    const out = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 1 << 28,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\0").filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Walks the project once and returns `KEY -> [files that read it]`, so a variable the schema does not declare can still be explained by where it is used rather than dumped into an undifferentiated list.
  *
@@ -306,6 +336,28 @@ const USAGE_RE = /process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*["'`]([A-Z][A-Z0-9_]*)
  */
 export function scanUsage(root) {
   const usage = new Map();
+
+  const read = (rel) => {
+    if (!SOURCE_EXTENSIONS.has(path.extname(rel))) return;
+    let source;
+    try {
+      source = readFileSync(path.join(root, rel), "utf8");
+    } catch {
+      return;
+    }
+    for (const match of source.matchAll(USAGE_RE)) {
+      const key = match[1] ?? match[2];
+      if (!usage.has(key)) usage.set(key, new Set());
+      usage.get(key).add(rel);
+    }
+  };
+
+  // In a git work tree the file list is what git sees (tracked plus untracked-not-ignored), so build outputs, scratch folders and stale checkouts never label a key and the output does not depend on what is on disk.
+  const listed = gitFiles(root);
+  if (listed) {
+    for (const rel of listed) read(rel);
+    return usage;
+  }
 
   const walk = (dir) => {
     let dirents;
@@ -320,19 +372,7 @@ export function scanUsage(root) {
         if (!(SKIP_DIRS.has(dirent.name) || dirent.name.startsWith(".next-"))) walk(full);
         continue;
       }
-      if (!SOURCE_EXTENSIONS.has(path.extname(dirent.name))) continue;
-      let source;
-      try {
-        source = readFileSync(full, "utf8");
-      } catch {
-        continue;
-      }
-      const rel = path.relative(root, full).replace(/\\/g, "/");
-      for (const match of source.matchAll(USAGE_RE)) {
-        const key = match[1] ?? match[2];
-        if (!usage.has(key)) usage.set(key, new Set());
-        usage.get(key).add(rel);
-      }
+      read(path.relative(root, full).replace(/\\/g, "/"));
     }
   };
 
@@ -393,7 +433,7 @@ export function findRuntimeEnvGaps(source) {
 }
 
 /** Renders one env file: schema order, schema comments, schema sections, then anything left over under "Uncategorised". */
-export function render(filename, entries, schemaKeys, schemaPath, usage = new Map(), pm = "pnpm") {
+export function render(filename, entries, schemaKeys, schemaPath, usage = new Map(), pm = "pnpm", handComments = new Map()) {
   const header = HEADER[filename] ?? HEADER.default;
   const out = [
     divider(),
@@ -460,6 +500,7 @@ export function render(filename, entries, schemaKeys, schemaPath, usage = new Ma
       out.push(sectionRule(title), "", ...commentBlock(blurb), "");
       for (const key of keys) {
         // The reader's next question about a tooling key is always "read by what?" — answering inline is what makes the group actionable rather than merely sorted.
+        out.push(...(handComments.get(key) ?? []));
         const files = classify(key, usage).files;
         if (files.length > 0) out.push(`# ${files.slice(0, 3).join(", ")}${files.length > 3 ? `, +${files.length - 3} more` : ""}`);
         out.push(`${key}=${entries.get(key)}`);
@@ -614,7 +655,7 @@ function main() {
     if (!statSync(target).isFile()) continue;
 
     const original = readFileSync(target, "utf8");
-    const { entries, order, duplicates } = parseAssignments(original);
+    const { entries, order, duplicates, comments } = parseAssignments(original);
 
     if (entries.size === 0) {
       console.log(`${ICONS.warn} ${label}: no assignments, skipped`);
@@ -668,7 +709,7 @@ function main() {
     if (duplicates.length > 0)
       problems.push(`${label} duplicate: ${duplicates.join(", ")}`);
 
-    const next = render(filename, entries, schemaKeys, schemaPath, usage, pm);
+    const next = render(filename, entries, schemaKeys, schemaPath, usage, pm, comments);
 
     // Refuse to write if the rewrite would change which keys exist. Comments and order are the only sanctioned edits, so a key-set difference means the parser mishandled something — most likely an exotic value — and writing would lose data.
     const after = parseAssignments(next);
