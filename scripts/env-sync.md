@@ -140,6 +140,8 @@ The file list is what git sees: inside a git work tree it comes from `git ls-fil
 
 A hand-written comment directly above a key that is not in the schema (the `#` lines between it and the previous blank line or key) is kept and written above the regenerated file label, so formatting is idempotent and loses no prose. A hand-written section heading is not kept: its key moves to the tool's group with its own comment. A schema key takes its comment from the schema only.
 
+A tracked `.github/workflows/*.yml` also counts: `secrets.KEY`, `vars.KEY` and `env.KEY` inside `${{ }}` are reads of `KEY`, labelled with the workflow path, so a CI-only key lands in the "scripts and tests only" group (`.github/` is a tooling directory).
+
 Detection covers `process.env.KEY` and `process.env["KEY"]` across `.ts/.tsx/.js/.mjs/.yaml` and friends. Generated artefact directories (`.next` and any `.next-*` second build output, `.output`, `playwright-report`, `test-results`) are skipped, so a key is never credited to its own failure log. A key read only via destructuring (`const { KEY, ...rest } = process.env`) reads as unused — correctly, in the one real case observed, where the code strips the variable on purpose.
 
 Use `--no-scan` to skip the walk; undeclared keys then group under a single neutral `Uncategorised` heading rather than being labelled on no evidence.

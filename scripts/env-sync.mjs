@@ -329,6 +329,9 @@ function gitFiles(root) {
   }
 }
 
+const WORKFLOW_RE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+const WORKFLOW_READ_RE = /\b(?:secrets|vars|env)\.([A-Z][A-Z0-9_]*)\b/g;
+
 /**
  * Walks the project once and returns `KEY -> [files that read it]`, so a variable the schema does not declare can still be explained by where it is used rather than dumped into an undifferentiated list.
  *
@@ -345,10 +348,16 @@ export function scanUsage(root) {
     } catch {
       return;
     }
-    for (const match of source.matchAll(USAGE_RE)) {
-      const key = match[1] ?? match[2];
+    const add = (key) => {
       if (!usage.has(key)) usage.set(key, new Set());
       usage.get(key).add(rel);
+    };
+    for (const match of source.matchAll(USAGE_RE)) add(match[1] ?? match[2]);
+    // A workflow reads a key through `${{ secrets.KEY }}`, `${{ vars.KEY }}` or `${{ env.KEY }}`, never through `process.env`.
+    if (WORKFLOW_RE.test(rel)) {
+      for (const expr of source.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+        for (const match of expr[1].matchAll(WORKFLOW_READ_RE)) add(match[1]);
+      }
     }
   };
 

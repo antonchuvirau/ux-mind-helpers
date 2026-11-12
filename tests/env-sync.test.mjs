@@ -337,6 +337,13 @@ console.log("\ngit file list");
   ok("a tracked reader is counted", usage.get("TRACKED_KEY")?.has("scripts/tracked.mjs"));
   write("scripts/untracked.mjs", "const k = process.env.UNTRACKED_KEY;\n");
   ok("an untracked, not ignored reader is counted", scanUsage(dir).has("UNTRACKED_KEY"));
+  mkdirSync(path.join(dir, ".github/workflows"), { recursive: true });
+  write(".github/workflows/ci.yml", "env:\n  A: ${{ secrets.CI_SECRET_KEY }}\n  B: ${{ vars.CI_VAR_KEY }} ${{ env.CI_ENV_KEY }}\n  C: plain.NOT_A_KEY\n");
+  git("add", ".github/workflows/ci.yml");
+  const wf = scanUsage(dir);
+  ok("a workflow secrets. read counts, labelled with the workflow", wf.get("CI_SECRET_KEY")?.has(".github/workflows/ci.yml"));
+  ok("a workflow vars. and env. read counts", wf.has("CI_VAR_KEY") && wf.has("CI_ENV_KEY"));
+  ok("a dotted name outside ${{ }} does not count", !wf.has("NOT_A_KEY"));
 }
 
 console.log("\nhand-written comments on undeclared keys");
