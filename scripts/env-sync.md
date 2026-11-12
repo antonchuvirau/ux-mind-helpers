@@ -136,6 +136,10 @@ SMTP_HOST="…"
 
 The last group deliberately does not say "delete me". A variable can be consumed entirely outside the codebase — Prisma's CLI, `vercel env pull`, a mail relay — and a scan of one repository cannot tell that apart from genuinely dead configuration. Nothing is ever removed automatically on the strength of it.
 
+The file list is what git sees: inside a git work tree it comes from `git ls-files --cached --others --exclude-standard` (run in `--cwd`), so build outputs, scratch folders and stale checkouts that git ignores never label a key and the output does not depend on what is on disk. Outside git the script walks the directory and skips a fixed list of generated folders instead.
+
+A hand-written comment directly above a key that is not in the schema (the `#` lines between it and the previous blank line or key) is kept and written above the regenerated file label, so formatting is idempotent and loses no prose. A hand-written section heading is not kept: its key moves to the tool's group with its own comment. A schema key takes its comment from the schema only.
+
 Detection covers `process.env.KEY` and `process.env["KEY"]` across `.ts/.tsx/.js/.mjs/.yaml` and friends. Generated artefact directories (`.next` and any `.next-*` second build output, `.output`, `playwright-report`, `test-results`) are skipped, so a key is never credited to its own failure log. A key read only via destructuring (`const { KEY, ...rest } = process.env`) reads as unused — correctly, in the one real case observed, where the code strips the variable on purpose.
 
 Use `--no-scan` to skip the walk; undeclared keys then group under a single neutral `Uncategorised` heading rather than being labelled on no evidence.
